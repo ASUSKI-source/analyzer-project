@@ -98,10 +98,10 @@ export default function Home() {
       ) : null}
 
       {/* Main Grid View */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
         
         {/* Market Overview Hero (Wider Column) */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           {/* Quick Stats Row */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {data?.market_overview ? (
@@ -126,10 +126,10 @@ export default function Home() {
           </div>
 
           {/* Main Chart Widget */}
-          <div className="true-glass rounded-2xl p-6 min-h-[500px] flex flex-col relative overflow-hidden group/chart">
+          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[400px] sm:min-h-[500px] flex flex-col relative overflow-hidden group/chart">
             <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover/chart:opacity-100 transition-opacity duration-1000" />
             
-            <div className="flex items-center justify-between mb-6 relative">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 relative">
               <h2 className="text-lg font-semibold text-marble flex items-center gap-3">
                 Market Momentum: {selectedAsset}
                 <div className="flex items-center gap-2">
@@ -175,7 +175,7 @@ export default function Home() {
 
         {/* Watchlist Sidebar (Narrow Column) */}
         <div className="space-y-6">
-          <div className="true-glass rounded-2xl p-6 min-h-[500px] relative overflow-hidden group/watchlist">
+          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[400px] sm:min-h-[500px] relative overflow-hidden group/watchlist">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-50" />
             
             <div className="flex items-center justify-between mb-6 relative">

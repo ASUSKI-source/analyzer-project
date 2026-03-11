@@ -37,7 +37,7 @@ export function AIPanel() {
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="fixed top-0 right-0 h-screen w-[420px] true-glass !rounded-none !border-t-0 !border-r-0 !border-b-0 shadow-[0_0_60px_rgba(0,0,0,0.8)] z-50 flex flex-col"
+            className="fixed top-0 right-0 h-screen w-full sm:w-[420px] true-glass !rounded-none !border-t-0 !border-r-0 !border-b-0 shadow-[0_0_60px_rgba(0,0,0,0.8)] z-50 flex flex-col"
           >
             {/* Panel Header */}
             <div className="flex items-center justify-between p-5 border-b border-glass-border bg-black/20">
