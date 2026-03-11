@@ -121,8 +121,12 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
     # Tier 1: Live prices
     price_task = get_broker().fetch_quotes(symbols)
 
-    # Tier 2: Technical indicators (each independently cached for 4h)
-    indicator_tasks = [get_cached_indicators(sym) for sym in symbols]
+    # Tier 2: Technical indicators (3 horizons per symbol, independently cached)
+    indicator_tasks = []
+    for sym in symbols:
+        indicator_tasks.append(get_cached_indicators(sym, "1h"))
+        indicator_tasks.append(get_cached_indicators(sym, "1d"))
+        indicator_tasks.append(get_cached_indicators(sym, "1w"))
 
     # Tier 3: Fundamentals (individually cached for 12h)
     fundamental_tasks = [_get_cached_fundamentals(sym) for sym in symbols]
@@ -131,8 +135,7 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
     news_tasks = [fetch_news_sentiment(sym) for sym in symbols]
 
     # Execute all tiers with a strict timeout.
-    # Railway's proxy kills connections at ~30s; we must finish data assembly
-    # well before that to leave time for the Anthropic API call.
+    # Total tasks: price (1) + TI (3*n) + Fund (n) + News (n) = 1 + 5n tasks
     n = len(symbols)
     try:
         all_results = await asyncio.wait_for(
@@ -146,16 +149,15 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
             timeout=15.0,
         )
         prices = all_results[0]
-        rest = list(all_results[1:])
+        ti_results = list(all_results[1 : 3 * n + 1])
+        fundamentals_raw = list(all_results[3 * n + 1 : 4 * n + 1])
+        news_raw = list(all_results[4 * n + 1 : 5 * n + 1])
     except asyncio.TimeoutError:
         logger.warning("Data assembly timed out after 15s. Proceeding with empty data context.")
         prices = []
-        rest = [None] * (3 * n)
-
-    # Parse results
-    indicators_raw = rest[0:n]
-    fundamentals_raw = rest[n:2*n]
-    news_raw = rest[2*n:3*n]
+        ti_results = [None] * (3 * n)
+        fundamentals_raw = [None] * n
+        news_raw = [None] * n
 
     # Build per-asset context
     price_map = {}
@@ -171,9 +173,14 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
         asset["price"] = price_data.get("price", 0)
         asset["change_percent"] = price_data.get("changePercent", 0)
 
-        # Technical indicators
-        ti = indicators_raw[i] if i < len(indicators_raw) and not isinstance(indicators_raw[i], Exception) else None
-        asset["technicals"] = ti if ti else {}
+        # Multi-Horizon Technicals
+        # Order in ti_results is sym0_1h, sym0_1d, sym0_1w, sym1_1h...
+        offset = i * 3
+        asset["technicals"] = {
+            "1h": ti_results[offset] if not isinstance(ti_results[offset], Exception) else {},
+            "1d": ti_results[offset+1] if not isinstance(ti_results[offset+1], Exception) else {},
+            "1w": ti_results[offset+2] if not isinstance(ti_results[offset+2], Exception) else {}
+        }
 
         # Fundamentals
         fund = fundamentals_raw[i] if i < len(fundamentals_raw) and not isinstance(fundamentals_raw[i], Exception) else None
@@ -210,17 +217,19 @@ _MASTER_PROMPT = """You are the ultimate Hybrid Financial Analyst: a neutral, da
 Your mission is to bridge the gap between complex institutional data and actionable, human-readable insights. You don't just report numbers; you connect dots between technical signals, fundamental health, and the broader "market pulse."
 
 ## Core Focus Areas:
-1. **Institutional Activity & Sentiment:** Look for clues in the news and price action that suggest institutional positioning or sector-wide rotations.
-2. **Deep Technical/Fundamental Hybrid:** Balance RSI/MACD signals with valuation metrics like P/E and EPS. A technical breakout is only as strong as its fundamental floor.
-3. **Macro-Awareness:** Stay alert for catalysts—earnings, Fed policy, sector news, or market-wide shifts—that could override local technical signals.
+1. **Institutional Activity & Sentiment:** Look for clues in the news and price action that suggest institutional positioning.
+2. **Multi-Horizon Technicals:** Match RSI/MACD with SMA_50/200 for structural trend and EMA_9/21 for high-velocity momentum.
+3. **Macro/Fundamental Hybrid:** Balance technical breakouts with valuation (P/E, EPS) and catalysts.
 
 ## Your Analysis Guidelines
 - **Be direct and honest:** No fluff, no hype. If the data looks weak, say so plainly.
-- **Evidence-Based:** Ground every observation in the DATA provided below. Do not hallucinate metrics.
-- **Identify Concentration Risk:** Flag if the user's watchlist is too heavily skewed toward one sector or asset class.
-- **Technical Precision:** Identify technically overbought/oversold conditions (RSI), MACD crossovers, and moving average trends.
-- **Fundamental Grounding:** Highlight valuation red flags (extreme P/E, declining EPS) or strengths.
-- **Macro Context:** Mention relevant macroeconomic news (Fed policy, rates, sector rotation) that impact the symbols.
+- **Evidence-Based:** Ground every observation in the DATA provided below.
+- **Three-Horizon Nuance:** Contrast the three timeframes provided (1h, 1d, 1w). 
+  - *Tactical (1h):* Use EMA_9/EMA_21 crossovers for immediate entry/exit signals.
+  - *Trend (1d):* The medium-term directional flow and SMA_50 support.
+  - *Strategic (1w):* High-timeframe structural health and major cycles.
+- **Highlight Conflicts:** If an asset is bullish on the Weekly but overextended on the 1h, flag it as a "Tactical Caution."
+- **Institutional Context:** Connect technical multi-timeframe signals to fundamental valuation and macro catalysts.
 
 ## Output Format
 Return a valid JSON object with this EXACT structure:
@@ -228,19 +237,28 @@ Return a valid JSON object with this EXACT structure:
   "market_summary": "1-2 sentence macro overview of current conditions",
   "watchlist_health": "STRONG" | "MODERATE" | "WEAK" | "MIXED",
   "risk_level": "LOW" | "MODERATE" | "HIGH",
-  "sector_exposure": "Brief note on sector concentration and institutional rotation",
+  "tactical_outlook": "Summary of immediate 1-5 day market momentum",
+  "strategic_horizon": "Summary of long-term structural trends and macro positioning",
   "assets": [
     {
       "symbol": "TICKER",
       "verdict": "BULLISH" | "BEARISH" | "NEUTRAL" | "CAUTION",
-      "key_metrics": {
-        "rsi": 45.2,
-        "pe_ratio": 22.5,
-        "macd_signal": "Bullish" | "Bearish" | "Neutral",
-        "trend_50d": "Above" | "Below" | "Cross"
+      "timeframe_signals": {
+        "tactical_1h": "Bullish" | "Bearish" | "Neutral",
+        "trend_1d": "Bullish" | "Bearish" | "Neutral",
+        "strategic_1w": "Bullish" | "Bearish" | "Neutral"
       },
-      "technical_bullets": ["Structured bullet point 1", "Structured bullet point 2"],
-      "fundamental_bullets": ["Structured bullet point 1", "Structured bullet point 2"],
+      "key_metrics": {
+        "rsi_daily": 45.2,
+        "pe_ratio": 22.5,
+        "macd_signal": "Bullish" | "Bearish" | "Neutral"
+      },
+      "analysis_bullets": [
+        "Tactical: [1h observation]",
+        "Trend: [Daily observation]",
+        "Strategic: [Weekly observation]",
+        "Fundamental/Catalyst: [Observation]"
+      ],
       "catalyst": "Brief upcoming event or news",
       "action_note": "Brief, neutral, educational observation"
     }
@@ -324,57 +342,50 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
         ti = asset_data.get("technicals", {})
         fund = asset_data.get("fundamentals", {})
 
-        rsi = ti.get("rsi_14")
-        trend = ti.get("trend_signal", "Neutral")
-        rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+        ti_all = asset_data.get("technicals", {})
+        ti_1h = ti_all.get("1h", {})
+        ti_1d = ti_all.get("1d", {})
+        ti_1w = ti_all.get("1w", {})
 
-        if rsi is not None and rsi > 70:
-            verdict = "CAUTION"
-            tech_summary = f"RSI at {rsi_str} — technically overbought. Watch for pullback."
-        elif rsi is not None and rsi < 30:
-            verdict = "BULLISH"
-            tech_summary = f"RSI at {rsi_str} — oversold territory. Potential bounce ahead."
-        elif trend == "Bullish":
-            verdict = "BULLISH"
-            tech_summary = f"RSI at {rsi_str} with bullish MACD crossover."
-        elif trend == "Bearish":
-            verdict = "BEARISH"
-            tech_summary = f"RSI at {rsi_str} with bearish MACD divergence."
-        else:
-            verdict = "NEUTRAL"
-            tech_summary = f"RSI at {rsi_str}. No strong directional signal."
-
+        rsi_1d = ti_1d.get("rsi_14")
+        trend_1d = ti_1d.get("trend_signal", "Neutral")
         pe = fund.get("pe_ratio")
+        
+        # Mock EMA logic (heuristic)
+        ema_9 = ti_1h.get("ema_9")
+        ema_21 = ti_1h.get("ema_21")
+        ema_sig = "Neutral"
+        if ema_9 and ema_21:
+            ema_sig = "Bullish" if ema_9 > ema_21 else "Bearish"
         
         # Build key metrics
         key_metrics = {
-            "rsi": round(rsi, 1) if rsi is not None else None,
+            "rsi_daily": round(rsi_1d, 1) if rsi_1d is not None else None,
             "pe_ratio": round(pe, 1) if pe is not None else None,
-            "macd_signal": trend,
-            "trend_50d": "Above" if (rsi and rsi > 50) else "Below"
+            "macd_signal": trend_1d,
+            "ema_signal": ema_sig
         }
 
         # Build bullet points
-        tech_bullets = [
-            tech_summary,
-            f"MACD is showing {trend.lower()} momentum.",
-            f"Volume appears {'stable' if rsi else 'limited'} on recent candles."
-        ]
-        
-        fund_bullets = [
-            f"P/E Ratio: {pe:.1f}" if pe is not None else "Valuation data is currently limited.",
-            "Revenue growth trend for this sector remains robust.",
-            "Institutional interest is currently in a consolidation phase."
+        analysis_bullets = [
+            f"Tactical: {ti_1h.get('trend_signal', 'Neutral')} momentum on 1h timeframe.",
+            f"Trend: Daily structure is {trend_1d.lower()} with RSI at {rsi_1d if rsi_1d else 'N/A'}.",
+            f"Strategic: Weekly health is currently {ti_1w.get('trend_signal', 'Neutral').lower()}.",
+            f"Fundamental: P/E Ratio at {pe:.1f}" if pe is not None else "Fundamental data limited."
         ]
 
         assets.append({
             "symbol": sym,
-            "verdict": verdict,
+            "verdict": "BULLISH" if trend_1d == "Bullish" else "NEUTRAL",
+            "timeframe_signals": {
+                "tactical_1h": ti_1h.get("trend_signal", "Neutral"),
+                "trend_1d": trend_1d,
+                "strategic_1w": ti_1w.get("trend_signal", "Neutral")
+            },
             "key_metrics": key_metrics,
-            "technical_bullets": tech_bullets,
-            "fundamental_bullets": fund_bullets,
+            "analysis_bullets": analysis_bullets,
             "catalyst": "Earnings season approaching — watch for guidance updates.",
-            "action_note": "This is a simulated report. Connect your Anthropic API key for live AI analysis."
+            "action_note": "Simulated report based on triple-horizon technical snapshots."
         })
 
     insight_text = "This is a simulated analysis. To enable real AI-powered analysis, add your ANTHROPIC_API_KEY to the backend environment variables."
@@ -385,7 +396,8 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
         "market_summary": "Markets are showing mixed signals. Monitor key support levels across major indices.",
         "watchlist_health": "MIXED",
         "risk_level": "MODERATE",
-        "sector_exposure": f"Watchlist contains {len(symbols)} assets. Review for sector concentration.",
+        "tactical_outlook": "Immediate sentiment is cautious following recent volatility.",
+        "strategic_horizon": "Long-term bullish structure remains intact despite short-term pullbacks.",
         "assets": assets,
         "overall_insight": insight_text,
         "_mock": True,

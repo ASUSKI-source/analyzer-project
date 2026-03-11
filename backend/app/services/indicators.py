@@ -19,43 +19,56 @@ logger = logging.getLogger(__name__)
 _INDICATOR_CACHE_TTL = 14_400
 
 
-async def get_cached_indicators(symbol: str) -> Optional[Dict[str, Any]]:
+async def get_cached_indicators(symbol: str, timeframe: str = "1d") -> Optional[Dict[str, Any]]:
     """
-    Async entry point for the AI analyzer.
-    Fetches historical candles, computes technical indicators,
-    and caches the result for 4 hours.
+    Async entry point for the AI analyzer and other services.
+    Fetches historical candles for a specific horizon (1h, 1d, 1w),
+    computes technical indicators, and caches the result for 4 hours.
+    
+    Why: Multi-timeframe analysis allows the AI to distinguish between 
+    tactical noise and strategic structural trends.
     """
     symbol = symbol.upper().strip()
-    cache_key = f"indicators_cache:{symbol}"
+    cache_key = f"indicators_cache:{symbol}:{timeframe}"
 
     # 1. Try cache
     cached = await cache_client.get(cache_key)
     if cached:
         return cached
 
-    # 2. Fetch candles
+    # 2. Map timeframe to lookback days
+    # 1h: 5 days of data (plenty for intraday RSI/MACD)
+    # 1d: 365 days (standard Daily view)
+    # 1w: 730 days (Strategic Weekly view)
+    lookback_map = {"1h": 5, "1d": 365, "1w": 730}
+    days = lookback_map.get(timeframe, 365)
+
+    # 3. Fetch candles
     try:
         from app.services.market_data import get_live_intraday_history
-        candles = await get_live_intraday_history(symbol, days=365)
+        candles = await get_live_intraday_history(symbol, days=days)
     except Exception as e:
-        logger.warning(f"Failed to fetch candles for cached indicators ({symbol}): {e}")
+        logger.warning(f"Failed to fetch candles for cached indicators ({symbol}, {timeframe}): {e}")
         return None
 
     if not candles or len(candles) < 20:
         return None
 
-    # 3. Compute using existing function
+    # 4. Compute using existing function
     ti = compute_technical_indicators(candles)
 
-    # 4. Serialize to dict for caching and AI consumption
+    # 5. Serialize to dict for caching and AI consumption
     result = {
         "symbol": symbol,
+        "timeframe": timeframe,
         "rsi_14": ti.rsi,
         "macd_line": ti.macd,
         "macd_signal": ti.macd_signal,
         "macd_histogram": ti.macd_hist,
         "sma_50": ti.sma_50,
         "sma_200": ti.sma_200,
+        "ema_9": ti.ema_9,
+        "ema_21": ti.ema_21,
         "bollinger_upper": ti.bollinger_upper,
         "bollinger_lower": ti.bollinger_lower,
         "trend_signal": ti.trend_signal,
@@ -71,7 +84,7 @@ async def get_cached_indicators(symbol: str) -> Optional[Dict[str, Any]]:
             result["rsi_signal"] = "NEUTRAL"
 
     await cache_client.set(cache_key, result, expire_seconds=_INDICATOR_CACHE_TTL)
-    logger.info(f"Cached indicators for {symbol} (4h TTL)")
+    logger.info(f"Cached {timeframe} indicators for {symbol} (4h TTL)")
     return result
 
 def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
@@ -110,6 +123,10 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     # 3. Simple Moving Averages (50 and 200)
     sma_50 = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
     sma_200 = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
+    
+    # 4. Exponential Moving Averages (9 and 21)
+    ema_9 = ta.trend.EMAIndicator(close=close, window=9).ema_indicator()
+    ema_21 = ta.trend.EMAIndicator(close=close, window=21).ema_indicator()
 
     # 4. Bollinger Bands
     bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
@@ -137,6 +154,8 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
         macd_hist=round(macd_diff.iloc[-1], 2) if not pd.isna(macd_diff.iloc[-1]) else None,
         sma_50=round(sma_50.iloc[-1], 2) if not pd.isna(sma_50.iloc[-1]) else None,
         sma_200=round(sma_200.iloc[-1], 2) if not pd.isna(sma_200.iloc[-1]) else None,
+        ema_9=round(ema_9.iloc[-1], 2) if not pd.isna(ema_9.iloc[-1]) else None,
+        ema_21=round(ema_21.iloc[-1], 2) if not pd.isna(ema_21.iloc[-1]) else None,
         bollinger_upper=round(bb_upper.iloc[-1], 2) if not pd.isna(bb_upper.iloc[-1]) else None,
         bollinger_lower=round(bb_lower.iloc[-1], 2) if not pd.isna(bb_lower.iloc[-1]) else None,
         trend_signal=signal

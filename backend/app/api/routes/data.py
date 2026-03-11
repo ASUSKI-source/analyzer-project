@@ -81,19 +81,31 @@ async def get_asset_analysis(symbol: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/assets/{symbol}/history", response_model=AssetHistoryResponse)
-async def get_history(symbol: str, days: int = 365, db: AsyncSession = Depends(get_db)):
+async def get_history(
+    symbol: str, 
+    days: int = 365, 
+    refresh: bool = Query(False, description="Force a fresh data sync from external providers"),
+    db: AsyncSession = Depends(get_db)
+):
     """
     Retrieve formatted historical candlestick data from TimescaleDB.
     Auto-aligns with real-time price to ensure chart consistency.
+    Supports 'refresh=true' to bypass cache and force a fresh sync with external provider.
     """
     symbol = symbol.upper()
     
-    # Fetch current price briefly to align the random walk if we are in mock mode
-    # In production with real TimescaleDB data, this is less critical but still good for latest 'float' candle.
+    # 1. Handle Refresh Logic and fetch current price
     price_results = await fetch_watchlist_prices([symbol])
     current_price = price_results[0].get("price") if price_results else None
 
-    chart_data = await get_asset_history(db=db, symbol=symbol, days=days, current_price=current_price)
+    # Pass the refresh flag to the service layer
+    chart_data = await get_asset_history(
+        db=db, 
+        symbol=symbol, 
+        days=days, 
+        current_price=current_price,
+        refresh=refresh
+    )
     return {
         "status": "success",
         "symbol": symbol,

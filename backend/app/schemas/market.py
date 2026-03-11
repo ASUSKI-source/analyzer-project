@@ -61,6 +61,8 @@ class TechnicalIndicators(BaseModel):
     macd_hist: Optional[float] = None
     sma_50: Optional[float] = None
     sma_200: Optional[float] = None
+    ema_9: Optional[float] = None
+    ema_21: Optional[float] = None
     bollinger_upper: Optional[float] = None
     bollinger_lower: Optional[float] = None
     trend_signal: str = "Neutral" # Bullish, Bearish, or Neutral

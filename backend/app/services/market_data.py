@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import settings
 from app.core.errors import DataNotReadyException, AssetNotFoundException
+from app.core.cache import cache_client
 from app.models.market import Asset, AssetCandle
 
 logger = logging.getLogger(__name__)
@@ -189,13 +190,48 @@ async def get_live_intraday_history(symbol: str, days: int):
     return chart_data
 
 
-async def get_asset_history(db: AsyncSession, symbol: str, days: int = 365, current_price: float = None):
+async def get_asset_history(
+    db: AsyncSession, 
+    symbol: str, 
+    days: int = 365, 
+    current_price: float = None,
+    refresh: bool = False
+):
     """
     Retrieves historical candlestick data for a given asset from our TimescaleDB.
     Returns it in a structured format ready for TradingView Lightweight charts.
+    If refresh=True, triggers a sync with external providers if not on cooldown.
     """
     symbol = symbol.upper()
     
+    # --- Rate Limiting Rails ---
+    if refresh:
+        # 1. Global Token Bucket Check (Max 4 external syncs per minute global)
+        global_bucket_key = "global_external_sync_bucket"
+        global_count = await cache_client.get(global_bucket_key) or 0
+        
+        # 2. Asset-level Cooldown Check (Max 1 sync per 30s per symbol)
+        asset_cooldown_key = f"asset_sync_cooldown:{symbol}"
+        is_on_cooldown = await cache_client.get(asset_cooldown_key)
+
+        if int(global_count) < 4 and not is_on_cooldown:
+            logger.info(f"Triggering hard refresh for {symbol}. Global count: {global_count}")
+            try:
+                # Trigger actual sync to update TimescaleDB
+                await sync_asset_history(db, symbol, days=max(days, 30))
+                
+                # Update cooldown and bucket
+                await cache_client.set(asset_cooldown_key, "locked", expire_seconds=30)
+                await cache_client.increment(global_bucket_key)
+                if int(global_count) == 0:
+                    # Initialize expiry for the bucket window (1 minute)
+                    await cache_client.expire(global_bucket_key, 60)
+            except Exception as e:
+                logger.error(f"Failed to sync asset on refresh: {e}")
+        else:
+            reason = "Global Limit" if int(global_count) >= 4 else "Asset Cooldown"
+            logger.warning(f"Refresh requested for {symbol} but throttled due to {reason}.")
+
     # 1. Provide Real-time Intraday accuracy for lower timeframe selections
     live_intraday = await get_live_intraday_history(symbol, days)
     if live_intraday and len(live_intraday) > 0:

@@ -18,6 +18,8 @@ export default function Home() {
   const [customPrices, setCustomPrices] = useState<MarketQuote[]>([]);
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
   const [chartDays, setChartDays] = useState<number>(365);
+  const [chartRefreshKey, setChartRefreshKey] = useState<number>(0);
+  const [isChartRefreshing, setIsChartRefreshing] = useState(false);
 
   const ytdDays = React.useMemo(() => {
     const now = new Date();
@@ -151,8 +153,20 @@ export default function Home() {
                     <span className={`whitespace-nowrap flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-bold ${data.sentiment.sentiment_score >= 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
                        AI: {data.sentiment.sentiment_score > 0 ? 'BULLISH' : 'BEARISH'}
                     </span>
-
                   )}
+                  {/* Small Refresh Button for Chart */}
+                  <button 
+                    disabled={isChartRefreshing}
+                    onClick={() => {
+                      setChartRefreshKey(prev => prev + 1);
+                      setIsChartRefreshing(true);
+                      setTimeout(() => setIsChartRefreshing(false), 30000); // 30s UI cooldown matching backend
+                    }}
+                    className={`p-1.5 rounded-lg border transition-all ${isChartRefreshing ? 'bg-blue-500/10 border-blue-500/20 text-blue-400 cursor-not-allowed' : 'bg-white/5 border-white/10 text-steel hover:text-marble hover:bg-white/10 hover:border-white/20'}`}
+                    title="Soft refresh chart data (30s cooldown)"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isChartRefreshing ? 'animate-spin' : ''}`} />
+                  </button>
                 </div>
               </h2>
               <div className="flex gap-2 p-1 bg-black/40 rounded-xl border border-white/5 shadow-inner overflow-x-auto no-scrollbar">
@@ -170,6 +184,7 @@ export default function Home() {
                <ChartWidget 
                  symbol={selectedAsset} 
                  days={chartDays}
+                 refreshKey={chartRefreshKey}
                  realtimePrice={
                    data?.market_overview?.find(m => m.symbol === selectedAsset)?.price || 
                    customPrices.find(p => p.symbol === selectedAsset)?.price

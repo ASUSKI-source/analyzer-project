@@ -7,14 +7,18 @@ import { API_BASE_URL } from "@/services/api_client";
 interface AssetAnalysis {
   symbol: string;
   verdict: string;
+  timeframe_signals: {
+    tactical_1h: string;
+    trend_1d: string;
+    strategic_1w: string;
+  };
   key_metrics: {
-    rsi?: number;
+    rsi_daily?: number;
     pe_ratio?: number;
     macd_signal?: string;
-    trend_50d?: string;
+    ema_signal?: string;
   };
-  technical_bullets: string[];
-  fundamental_bullets: string[];
+  analysis_bullets: string[];
   catalyst: string;
   action_note: string;
 }
@@ -23,7 +27,8 @@ interface AIReport {
   market_summary: string;
   watchlist_health: string;
   risk_level: string;
-  sector_exposure: string;
+  tactical_outlook: string;
+  strategic_horizon: string;
   assets: AssetAnalysis[];
   overall_insight: string;
   generated_at?: string;
@@ -217,11 +222,23 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
       </div>
 
       {/* Market Summary */}
-      <div className="px-5 sm:px-6 py-4 border-b border-white/5 bg-black/5">
-        <p className="text-sm text-marble/90 leading-relaxed">{report.market_summary}</p>
-        {report.sector_exposure && (
-          <p className="text-xs text-steel mt-2">📊 {report.sector_exposure}</p>
-        )}
+      <div className="px-5 sm:px-6 py-4 border-b border-white/5 bg-black/5 space-y-4">
+        <p className="text-sm text-marble/90 leading-relaxed font-medium">{report.market_summary}</p>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/10">
+            <h4 className="text-[10px] uppercase tracking-wider text-blue-400 font-bold mb-1 flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3" /> Tactical Outlook (1-5 Days)
+            </h4>
+            <p className="text-xs text-steel leading-relaxed">{report.tactical_outlook}</p>
+          </div>
+          <div className="p-3 rounded-xl bg-purple-500/5 border border-purple-500/10">
+            <h4 className="text-[10px] uppercase tracking-wider text-purple-400 font-bold mb-1 flex items-center gap-1.5">
+              <Shield className="w-3 h-3" /> Strategic Horizon (Months)
+            </h4>
+            <p className="text-xs text-steel leading-relaxed">{report.strategic_horizon}</p>
+          </div>
+        </div>
       </div>
 
       {/* Per-Asset Analysis */}
@@ -254,27 +271,40 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
                     {asset.verdict}
                   </span>
 
-                  {/* Key Metric Badges */}
+                  {/* Multi-Horizon Pulse */}
                   <div className="flex items-center gap-2">
-                    {asset.key_metrics?.rsi !== undefined && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="RSI (14)">
+                    {["1h", "1d", "1w"].map((tf) => {
+                      const sig = tf === "1h" ? asset.timeframe_signals?.tactical_1h :
+                                  tf === "1d" ? asset.timeframe_signals?.trend_1d :
+                                  asset.timeframe_signals?.strategic_1w;
+                      
+                      const color = sig === "Bullish" ? "text-green-400 bg-green-500/10 border-green-500/20" :
+                                   sig === "Bearish" ? "text-red-400 bg-red-500/10 border-red-500/20" :
+                                   "text-steel bg-white/5 border-white/10";
+
+                      return (
+                        <div key={tf} className={`px-2 py-0.5 rounded border text-[9px] font-bold ${color}`} title={`${tf} Horizon Signal`}>
+                          {tf.toUpperCase()}: {sig?.slice(0, 4)}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Key Metric Badges */}
+                  <div className="flex items-center gap-2 ml-2 border-l border-white/10 pl-4">
+                    {asset.key_metrics?.rsi_daily !== undefined && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="Daily RSI">
                         <span className="text-steel">RSI</span>
-                        <span className={asset.key_metrics.rsi > 70 ? "text-red-400" : asset.key_metrics.rsi < 30 ? "text-green-400" : "text-blue-300"}>
-                          {asset.key_metrics.rsi}
+                        <span className={asset.key_metrics.rsi_daily > 70 ? "text-red-400" : asset.key_metrics.rsi_daily < 30 ? "text-green-400" : "text-blue-300"}>
+                          {asset.key_metrics.rsi_daily}
                         </span>
                       </div>
                     )}
-                    {asset.key_metrics?.pe_ratio !== undefined && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="P/E Ratio">
-                        <span className="text-steel">P/E</span>
-                        <span className="text-purple-300">{asset.key_metrics.pe_ratio}</span>
-                      </div>
-                    )}
-                    {asset.key_metrics?.macd_signal && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="MACD Signal">
-                        <span className="text-steel text-[9px] uppercase">MACD</span>
-                        <span className={asset.key_metrics.macd_signal === 'Bullish' ? "text-green-400" : asset.key_metrics.macd_signal === 'Bearish' ? "text-red-400" : "text-steel"}>
-                          {asset.key_metrics.macd_signal}
+                    {asset.key_metrics?.ema_signal && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="EMA (9/21) Momentum">
+                        <span className="text-steel">EMA</span>
+                        <span className={asset.key_metrics.ema_signal === 'Bullish' ? "text-green-400" : asset.key_metrics.ema_signal === 'Bearish' ? "text-red-400" : "text-steel"}>
+                          {asset.key_metrics.ema_signal}
                         </span>
                       </div>
                     )}
@@ -289,37 +319,19 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
               {/* Expanded Detail */}
               {isExpanded && (
                 <div className="px-5 sm:px-6 pb-6 space-y-4 animate-in slide-in-from-top-2 duration-200">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Technical Strategy */}
-                    <div className="bg-black/20 rounded-2xl p-4 border border-white/5 relative overflow-hidden">
-                      <div className="absolute top-0 right-0 p-3 opacity-10">
-                        <TrendingUp className="w-8 h-8 text-blue-400" />
-                      </div>
-                      <h4 className="text-[10px] uppercase tracking-[0.2em] text-blue-400 mb-3 font-bold">Technical Outlook</h4>
-                      <ul className="space-y-2">
-                        {Array.isArray(asset.technical_bullets) ? asset.technical_bullets.map((bullet, idx) => (
-                          <li key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
-                            <span className="text-blue-500/50 mt-1">•</span>
-                            {bullet}
-                          </li>
-                        )) : <li className="text-sm text-steel">No technical data available.</li>}
-                      </ul>
+                  {/* Horizon-Depth Analysis */}
+                  <div className="bg-black/20 rounded-2xl p-5 border border-white/5 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-4 opacity-10">
+                      <Sparkles className="w-12 h-12 text-blue-400" />
                     </div>
-
-                    {/* Fundamental Core */}
-                    <div className="bg-black/20 rounded-2xl p-4 border border-white/5 relative overflow-hidden">
-                      <div className="absolute top-0 right-0 p-3 opacity-10">
-                        <Sparkles className="w-8 h-8 text-purple-400" />
-                      </div>
-                      <h4 className="text-[10px] uppercase tracking-[0.2em] text-purple-400 mb-3 font-bold">Fundamental Health</h4>
-                      <ul className="space-y-2">
-                        {Array.isArray(asset.fundamental_bullets) ? asset.fundamental_bullets.map((bullet, idx) => (
-                          <li key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
-                            <span className="text-purple-500/50 mt-1">•</span>
-                            {bullet}
-                          </li>
-                        )) : <li className="text-sm text-steel">No fundamental data available.</li>}
-                      </ul>
+                    <h4 className="text-[10px] uppercase tracking-[0.2em] text-blue-400 mb-4 font-bold">Horizon-Depth Analysis</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+                      {Array.isArray(asset.analysis_bullets) ? asset.analysis_bullets.map((bullet, idx) => (
+                        <div key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
+                          <span className="text-blue-500/50 mt-1.5 h-1.5 w-1.5 rounded-full bg-current shrink-0" />
+                          {bullet}
+                        </div>
+                      )) : <p className="text-sm text-steel">Multi-horizon data processing...</p>}
                     </div>
                   </div>
 

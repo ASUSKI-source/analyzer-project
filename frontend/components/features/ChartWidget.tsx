@@ -5,7 +5,17 @@ import { createChart, ColorType, IChartApi, ISeriesApi, Time, CandlestickSeries,
 import { fetchAssetHistory } from "@/services/api_client";
 import { TrendingUp, RefreshCw } from "lucide-react";
 
-export function ChartWidget({ symbol = "AAPL", realtimePrice, days = 365 }: { symbol?: string; realtimePrice?: number; days?: number }) {
+export function ChartWidget({ 
+  symbol = "AAPL", 
+  realtimePrice, 
+  days = 365,
+  refreshKey = 0 
+}: { 
+  symbol?: string; 
+  realtimePrice?: number; 
+  days?: number;
+  refreshKey?: number;
+}) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -106,11 +116,11 @@ export function ChartWidget({ symbol = "AAPL", realtimePrice, days = 365 }: { sy
     seriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
-    const loadData = async () => {
+    const loadData = async (isRefreshed: boolean = false) => {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchAssetHistory(symbol, days);
+        const data = await fetchAssetHistory(symbol, days, isRefreshed);
         if (data && data.length > 0) {
           // lightweight-charts requires data to be sorted strictly ascending by time
           const sorted = [...data].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
@@ -136,7 +146,7 @@ export function ChartWidget({ symbol = "AAPL", realtimePrice, days = 365 }: { sy
       }
     };
 
-    loadData();
+    loadData(refreshKey > 0);
 
     // Cleanup when component unmounts
     return () => {
@@ -144,7 +154,7 @@ export function ChartWidget({ symbol = "AAPL", realtimePrice, days = 365 }: { sy
         chartRef.current.remove();
       }
     };
-  }, [symbol, days]);
+  }, [symbol, days, refreshKey]);
 
   return (
     <div className="relative flex-1 w-full h-full min-h-[250px]">
