@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str | None = None
     POLYGON_API_KEY: str | None = None
     FINNHUB_API_KEY: str | None = None
+    FRONTEND_URL: str | None = "http://localhost:3000"
     
     # Advanced Security: JWT and User Session Config
     SECRET_KEY: str = "supersecretkey_change_in_production"
