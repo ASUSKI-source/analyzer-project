@@ -41,6 +41,15 @@ from app.core.cache import cache_client
 async def startup_event():
     logger.info("Application starting up...")
     await cache_client.connect()
+    
+    # Auto-create database tables on first boot (safe to run repeatedly — 
+    # create_all only creates tables that don't already exist).
+    from app.models.base import Base
+    from app.models import user, market, portfolio  # noqa: F401 — force model registration
+    from app.core.database import engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables verified/created.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
