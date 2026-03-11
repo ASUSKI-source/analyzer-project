@@ -304,14 +304,14 @@ Provide your analysis following the output format specified in your system instr
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Anthropic API error: {e.response.status_code} - {e.response.text[:200]}")
-        return _generate_mock_report(symbols, data_context)
+        return _generate_mock_report(symbols, data_context, error_reason=f"Anthropic API Error {e.response.status_code}: {e.response.text[:100]}")
     except Exception as e:
         logger.error(f"Anthropic call failed: {e}")
-        return _generate_mock_report(symbols, data_context)
+        return _generate_mock_report(symbols, data_context, error_reason=f"Network/Internal Error: {str(e)}")
 
 
-def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a realistic mock report when no API key is available."""
+def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], error_reason: str = None) -> Dict[str, Any]:
+    """Generate a realistic mock report when no API key is available or the API call fails."""
     assets = []
     for asset_data in data_context.get("assets", []):
         sym = asset_data.get("symbol", "???")
@@ -350,13 +350,17 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any]) -> D
             "action_note": "This is a simulated report. Connect your Anthropic API key for live AI analysis."
         })
 
+    insight_text = "This is a simulated analysis. To enable real AI-powered analysis, add your ANTHROPIC_API_KEY to the backend environment variables."
+    if error_reason:
+        insight_text = f"Simulated Analysis. AI engine fallback triggered: {error_reason}"
+
     return {
         "market_summary": "Markets are showing mixed signals. Monitor key support levels across major indices.",
         "watchlist_health": "MIXED",
         "risk_level": "MODERATE",
         "sector_exposure": f"Watchlist contains {len(symbols)} assets. Review for sector concentration.",
         "assets": assets,
-        "overall_insight": "This is a simulated analysis. To enable real AI-powered analysis, add your ANTHROPIC_API_KEY to the backend environment variables.",
+        "overall_insight": insight_text,
         "_mock": True,
     }
 
