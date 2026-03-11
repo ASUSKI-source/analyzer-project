@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  /* Steel & Slate Defaults (Dark Mode Hub) */
+  --background: #06090e;
+  /* Even deeper slate for high contrast */
+  --foreground: #F8FAFC;
+
+  /* True Glassmorphism primitives */
+  --panel-glass: rgba(15, 23, 42, 0.4);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  /* White sheer border not blue sheer */
+  --panel-highlight: rgba(255, 255, 255, 0.05);
+  /* Soft specular highlight for inset */
+
+  /* Semantic Colors */
+  --brand-steel: #94a3b8;
+  --brand-slate: #1e293b;
+  --brand-marble: #f8fafc;
+
+  --accent-blue: #38bdf8;
+  --accent-success: #10b981;
+  --accent-danger: #f43f5e;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-glass: var(--panel-glass);
+  --color-glass-border: var(--panel-border);
+
+  --color-steel: var(--brand-steel);
+  --color-slate-dark: var(--brand-slate);
+  --color-marble: var(--brand-marble);
+  --color-positive: var(--accent-success);
+  --color-negative: var(--accent-danger);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer utilities {
+  .true-glass {
+    @apply bg-glass backdrop-blur-2xl border border-glass-border shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] ring-1 ring-black/20;
+  }
+}
+
+body {
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  background-color: transparent !important;
+}
+
+/* Morphing Blobs — aggressive breathing with shape-shift and drift */
+@keyframes blob-morph-1 {
+  0% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; transform: translate(0, 0) scale(1); opacity: 0.35; }
+  15% { border-radius: 40% 60% 50% 50% / 50% 40% 60% 50%; transform: translate(40px, -30px) scale(1.2); opacity: 0.55; }
+  30% { border-radius: 50% 60% 30% 60% / 30% 50% 70% 60%; transform: translate(10px, 20px) scale(0.85); opacity: 0.25; }
+  50% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; transform: translate(-30px, -10px) scale(1.15); opacity: 0.5; }
+  65% { border-radius: 70% 30% 40% 60% / 40% 70% 50% 30%; transform: translate(25px, 30px) scale(0.9); opacity: 0.3; }
+  80% { border-radius: 40% 60% 70% 30% / 70% 30% 50% 60%; transform: translate(-15px, -25px) scale(1.1); opacity: 0.45; }
+  100% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; transform: translate(0, 0) scale(1); opacity: 0.35; }
+}
+
+@keyframes blob-morph-2 {
+  0% { border-radius: 40% 60% 70% 30% / 40% 50% 60% 50%; transform: translate(0, 0) scale(1); opacity: 0.35; }
+  20% { border-radius: 70% 30% 50% 60% / 30% 60% 40% 70%; transform: translate(-40px, 25px) scale(1.18); opacity: 0.5; }
+  40% { border-radius: 30% 50% 70% 40% / 60% 40% 30% 70%; transform: translate(20px, -30px) scale(0.82); opacity: 0.2; }
+  55% { border-radius: 60% 40% 30% 70% / 50% 70% 30% 50%; transform: translate(-20px, 15px) scale(1.12); opacity: 0.45; }
+  75% { border-radius: 50% 50% 60% 40% / 40% 60% 50% 50%; transform: translate(35px, -15px) scale(0.88); opacity: 0.28; }
+  100% { border-radius: 40% 60% 70% 30% / 40% 50% 60% 50%; transform: translate(0, 0) scale(1); opacity: 0.35; }
+}
+
+@keyframes blob-morph-3 {
+  0% { border-radius: 50% 50% 50% 50%; transform: translate(-50%, -50%) scale(1); opacity: 0.12; }
+  25% { border-radius: 65% 35% 55% 45% / 35% 65% 45% 55%; transform: translate(-42%, -58%) scale(1.25); opacity: 0.25; }
+  50% { border-radius: 35% 65% 45% 55% / 55% 35% 65% 45%; transform: translate(-58%, -42%) scale(0.8); opacity: 0.08; }
+  75% { border-radius: 55% 45% 35% 65% / 45% 55% 35% 65%; transform: translate(-45%, -55%) scale(1.15); opacity: 0.2; }
+  100% { border-radius: 50% 50% 50% 50%; transform: translate(-50%, -50%) scale(1); opacity: 0.12; }
+}
