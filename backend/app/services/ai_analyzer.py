@@ -89,6 +89,8 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
       Tier 1: Live prices (DataBroker, 10s cache)
       Tier 2: Technical indicators (indicators.py, 4h cache)
       Tier 3: Fundamentals + News (Finnhub, 12h cache)
+    
+    Has a strict 15-second timeout to prevent Railway proxy kills.
     """
     from app.services.providers.broker import get_broker
     from app.services.indicators import get_cached_indicators
@@ -106,17 +108,29 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
     # Tier 3b: News sentiment
     news_tasks = [fetch_news_sentiment(sym) for sym in symbols]
 
-    # Execute all tiers concurrently
-    prices, *rest = await asyncio.gather(
-        price_task,
-        *indicator_tasks,
-        *fundamental_tasks,
-        *news_tasks,
-        return_exceptions=True,
-    )
+    # Execute all tiers with a strict timeout.
+    # Railway's proxy kills connections at ~30s; we must finish data assembly
+    # well before that to leave time for the Anthropic API call.
+    n = len(symbols)
+    try:
+        all_results = await asyncio.wait_for(
+            asyncio.gather(
+                price_task,
+                *indicator_tasks,
+                *fundamental_tasks,
+                *news_tasks,
+                return_exceptions=True,
+            ),
+            timeout=15.0,
+        )
+        prices = all_results[0]
+        rest = list(all_results[1:])
+    except asyncio.TimeoutError:
+        logger.warning("Data assembly timed out after 15s. Proceeding with empty data context.")
+        prices = []
+        rest = [None] * (3 * n)
 
     # Parse results
-    n = len(symbols)
     indicators_raw = rest[0:n]
     fundamentals_raw = rest[n:2*n]
     news_raw = rest[2*n:3*n]
@@ -136,15 +150,15 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
         asset["change_percent"] = price_data.get("changePercent", 0)
 
         # Technical indicators
-        ti = indicators_raw[i] if not isinstance(indicators_raw[i], Exception) else None
+        ti = indicators_raw[i] if i < len(indicators_raw) and not isinstance(indicators_raw[i], Exception) else None
         asset["technicals"] = ti if ti else {}
 
         # Fundamentals
-        fund = fundamentals_raw[i] if not isinstance(fundamentals_raw[i], Exception) else None
+        fund = fundamentals_raw[i] if i < len(fundamentals_raw) and not isinstance(fundamentals_raw[i], Exception) else None
         asset["fundamentals"] = fund if fund else {}
 
         # News sentiment
-        news = news_raw[i] if not isinstance(news_raw[i], Exception) else None
+        news = news_raw[i] if i < len(news_raw) and not isinstance(news_raw[i], Exception) else None
         asset["news_sentiment"] = news if news else {}
 
         assets.append(asset)

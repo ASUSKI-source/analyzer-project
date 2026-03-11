@@ -1,6 +1,7 @@
 """
 AI Analysis Routes — Serves AI-powered watchlist reports.
 """
+import asyncio
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
@@ -14,6 +15,11 @@ from app.services.watchlist import get_user_watchlist
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Railway's proxy kills connections after ~30s with no response.
+# We MUST respond before that, or the proxy drops the connection
+# and the browser interprets the missing headers as a CORS failure.
+_ENDPOINT_TIMEOUT = 25.0  # seconds
 
 
 @router.get("/watchlist-analysis")
@@ -47,6 +53,31 @@ async def get_watchlist_analysis(
     symbol_list = symbol_list[:20]
 
     user_id = str(current_user.id)
-    report = await generate_watchlist_report(symbols=symbol_list, user_id=user_id)
+
+    # Global timeout: Railway's proxy will kill our connection at ~30s.
+    # We enforce 25s so we ALWAYS return a response (even a partial one)
+    # before the proxy drops us — preventing the phantom CORS error.
+    try:
+        report = await asyncio.wait_for(
+            generate_watchlist_report(symbols=symbol_list, user_id=user_id),
+            timeout=_ENDPOINT_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"AI report generation timed out after {_ENDPOINT_TIMEOUT}s for user {user_id}")
+        return {
+            "market_summary": "Analysis timed out. The server was unable to gather all data in time. Try again shortly — cached data will speed up the next attempt.",
+            "watchlist_health": "MIXED",
+            "risk_level": "MODERATE",
+            "sector_exposure": f"Attempted analysis of {len(symbol_list)} assets.",
+            "assets": [],
+            "overall_insight": "The analysis engine timed out gathering live market data. This usually resolves on a second attempt as data gets cached.",
+            "_timeout": True,
+        }
+    except Exception as e:
+        logger.error(f"AI report generation crashed: {e}", exc_info=True)
+        return {
+            "error": f"Analysis failed: {str(e)[:200]}",
+            "assets": [],
+        }
 
     return report
