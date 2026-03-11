@@ -5,8 +5,9 @@ from app.core.cache import cache_client
 
 logger = logging.getLogger(__name__)
 
-from app.services.finnhub import fetch_stock_prices, fetch_news_sentiment
-from app.services.coingecko import fetch_crypto_prices, is_crypto
+# Smart Data Broker — replaces direct provider imports
+from app.services.providers.broker import get_broker
+from app.services.finnhub import fetch_news_sentiment  # Sentiment stays direct (only Finnhub provides it)
 import random
 
 def apply_dev_shimmer(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -23,30 +24,16 @@ def apply_dev_shimmer(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 async def fetch_watchlist_prices(symbols: List[str]) -> List[Dict[str, Any]]:
     """
-    Smart router: splits symbols into stocks (Finnhub) and crypto (CoinGecko),
-    fetches both concurrently, then reassembles in the original order.
+    Smart-routed price fetcher.
+    Delegates to the DataBroker which scores all providers and picks
+    the optimal one per symbol, with automatic fallback on failure.
     """
     if not symbols:
         return []
 
-    # Split into stock and crypto buckets
-    stock_symbols = [s for s in symbols if not is_crypto(s)]
-    crypto_symbols = [s for s in symbols if is_crypto(s)]
+    broker = get_broker()
+    results = await broker.fetch_quotes(symbols)
 
-    # Fetch both concurrently
-    stock_results, crypto_results = await asyncio.gather(
-        fetch_stock_prices(stock_symbols) if stock_symbols else _empty(),
-        fetch_crypto_prices(crypto_symbols) if crypto_symbols else _empty()
-    )
-
-    # Merge results
-    price_map: Dict[str, Dict[str, Any]] = {}
-    for item in stock_results + crypto_results:
-        price_map[item["symbol"]] = item
-
-    # Reassemble in the original order
-    results = [price_map.get(sym.upper(), {"symbol": sym.upper(), "price": 0, "changePercent": 0}) for sym in symbols]
-    
     # Apply shimmer right before returning to ensure every call is unique
     return apply_dev_shimmer(results)
 
