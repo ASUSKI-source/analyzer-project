@@ -147,7 +147,7 @@ export function ChartWidget({ symbol = "AAPL", realtimePrice, days = 365 }: { sy
   }, [symbol, days]);
 
   return (
-    <div className="relative flex-1 w-full h-full min-h-[400px]">
+    <div className="relative flex-1 w-full h-full min-h-[250px]">
       {/* Loading Overlay */}
       {loading && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm rounded-xl">

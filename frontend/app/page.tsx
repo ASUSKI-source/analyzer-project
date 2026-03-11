@@ -75,27 +75,29 @@ export default function Home() {
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
       
-      {/* Page Header */}
-      <div className="flex flex-col gap-2 relative">
-        <h1 className="text-3xl font-bold tracking-tight text-marble">Market Overview</h1>
-        <p className="text-steel flex items-center gap-2 text-sm">
-          <Clock className="w-4 h-4" /> Market Open • 
-          <span className="flex items-center gap-1.5 ml-1">
-            <span className="relative flex h-2 w-2">
-              <span className={`absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 ${refreshing ? 'animate-ping' : ''}`}></span>
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${refreshing ? 'bg-blue-500' : 'bg-blue-500/50'}`}></span>
+      {/* Page Header (Sticky on Mobile) */}
+      <div className="sticky top-[64px] z-30 -mx-6 px-6 py-4 bg-slate-950/80 backdrop-blur-xl border-b border-white/5 sm:relative sm:top-0 sm:bg-transparent sm:backdrop-blur-none sm:border-none sm:p-0 sm:mx-0">
+        <div className="flex flex-col gap-2 relative">
+          <h1 className="text-3xl font-bold tracking-tight text-marble">Market Overview</h1>
+          <p className="text-steel flex items-center gap-2 text-sm">
+            <Clock className="w-4 h-4" /> Market Open • 
+            <span className="flex items-center gap-1.5 ml-1">
+              <span className="relative flex h-2 w-2">
+                <span className={`absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 ${refreshing ? 'animate-ping' : ''}`}></span>
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${refreshing ? 'bg-blue-500' : 'bg-blue-500/50'}`}></span>
+              </span>
+              Live Data Sync {lastUpdated && <span className="text-[10px] opacity-50 ml-1">at {lastUpdated.toLocaleTimeString()}</span>}
             </span>
-            Live Data Sync {lastUpdated && <span className="text-[10px] opacity-50 ml-1">at {lastUpdated.toLocaleTimeString()}</span>}
-          </span>
-          {(loading || refreshing) && <RefreshCw className="w-3 h-3 animate-spin text-blue-400 ml-2" />}
-        </p>
-      </div>
-
-      {error ? (
-        <div className="w-full p-4 rounded-xl truly-glass border border-red-500/30 bg-red-500/10 text-red-400">
-          Failed to load live market data: {error}. Are your backend and Redis servers running?
+            {(loading || refreshing) && <RefreshCw className="w-3 h-3 animate-spin text-blue-400 ml-2" />}
+          </p>
         </div>
-      ) : null}
+
+        {error ? (
+          <div className="w-full mt-4 p-4 rounded-xl truly-glass border border-red-500/30 bg-red-500/10 text-red-400">
+            Failed to load live market data: {error}. Are your backend and Redis servers running?
+          </div>
+        ) : null}
+      </div>
 
       {/* Main Grid View */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
@@ -126,7 +128,7 @@ export default function Home() {
           </div>
 
           {/* Main Chart Widget */}
-          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[400px] sm:min-h-[500px] flex flex-col relative overflow-hidden group/chart">
+          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[250px] sm:min-h-[500px] flex flex-col relative overflow-hidden group/chart">
             <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover/chart:opacity-100 transition-opacity duration-1000" />
             
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 relative">
@@ -175,15 +177,15 @@ export default function Home() {
 
         {/* Watchlist Sidebar (Narrow Column) */}
         <div className="space-y-6">
-          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[400px] sm:min-h-[500px] relative overflow-hidden group/watchlist">
+          <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[250px] sm:min-h-[500px] relative overflow-hidden group/watchlist">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-50" />
             
-            <div className="flex items-center justify-between mb-6 relative">
+            <div className="flex items-center justify-between mb-6 relative sticky top-0 z-10 bg-black/40 -mx-4 px-4 py-2 sm:bg-transparent sm:mx-0 sm:px-0 sm:py-0 sm:relative backdrop-blur-md rounded-lg sm:rounded-none">
               <h2 className="text-lg font-semibold text-marble flex items-center gap-2">
                 Watchlist
                 <span className={`flex h-2 w-2 rounded-full ${loading ? 'bg-steel animate-pulse' : 'bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]'}`}></span>
               </h2>
-              <button className="text-xs tracking-wider uppercase font-semibold text-blue-400 hover:text-blue-300 hover:tracking-widest transition-all">
+              <button className="text-xs tracking-wider uppercase font-semibold text-blue-400 hover:text-blue-300 hover:tracking-widest transition-all p-2 -mr-2 sm:p-0 sm:-mr-0">
                 View All
               </button>
             </div>
@@ -374,7 +376,7 @@ function PriceBubble({ symbol, price }: { symbol: string, price: number }) {
 
 function FilterButton({ children, active, onClick }: { children: React.ReactNode, active?: boolean, onClick?: () => void }) {
   return (
-    <button onClick={onClick} className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${active ? "bg-white/15 text-marble shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] border border-white/10" : "text-steel hover:text-marble hover:bg-white/5 border border-transparent"}`}>
+    <button onClick={onClick} className={`min-w-[44px] min-h-[36px] px-3 sm:px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${active ? "bg-white/15 text-marble shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] border border-white/10" : "text-steel hover:text-marble hover:bg-white/5 border border-transparent"}`}>
       {children}
     </button>
   )
