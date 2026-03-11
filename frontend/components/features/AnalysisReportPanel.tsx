@@ -7,8 +7,14 @@ import { API_BASE_URL } from "@/services/api_client";
 interface AssetAnalysis {
   symbol: string;
   verdict: string;
-  technical_summary: string;
-  fundamental_summary: string;
+  key_metrics: {
+    rsi?: number;
+    pe_ratio?: number;
+    macd_signal?: string;
+    trend_50d?: string;
+  };
+  technical_bullets: string[];
+  fundamental_bullets: string[];
   catalyst: string;
   action_note: string;
 }
@@ -226,14 +232,14 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
 
           return (
             <div key={asset.symbol} className="group/asset">
-              {/* Collapsed Header */}
-              <button
+              {/* Collapsed Header (Full Row Clickable) */}
+              <div 
                 onClick={() => toggleAsset(asset.symbol)}
-                className="w-full flex items-center justify-between px-5 sm:px-6 py-4 hover:bg-white/5 transition-colors text-left"
+                className="w-full flex items-center justify-between px-5 sm:px-6 py-4 hover:bg-white/5 transition-colors text-left cursor-pointer"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-4 flex-wrap">
                   <span
-                    className="font-mono font-bold text-marble hover:text-blue-400 transition-colors cursor-pointer"
+                    className="font-mono font-bold text-marble hover:text-blue-400 transition-colors text-base z-10"
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectAsset?.(asset.symbol);
@@ -241,41 +247,102 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
                   >
                     {asset.symbol}
                   </span>
+                  
+                  {/* Verdict Badge */}
                   <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold flex items-center gap-1 ${vc.bg} ${vc.color}`}>
                     {vc.icon}
                     {asset.verdict}
                   </span>
+
+                  {/* Key Metric Badges */}
+                  <div className="flex items-center gap-2">
+                    {asset.key_metrics?.rsi !== undefined && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="RSI (14)">
+                        <span className="text-steel">RSI</span>
+                        <span className={asset.key_metrics.rsi > 70 ? "text-red-400" : asset.key_metrics.rsi < 30 ? "text-green-400" : "text-blue-300"}>
+                          {asset.key_metrics.rsi}
+                        </span>
+                      </div>
+                    )}
+                    {asset.key_metrics?.pe_ratio !== undefined && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="P/E Ratio">
+                        <span className="text-steel">P/E</span>
+                        <span className="text-purple-300">{asset.key_metrics.pe_ratio}</span>
+                      </div>
+                    )}
+                    {asset.key_metrics?.macd_signal && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="MACD Signal">
+                        <span className="text-steel text-[9px] uppercase">MACD</span>
+                        <span className={asset.key_metrics.macd_signal === 'Bullish' ? "text-green-400" : asset.key_metrics.macd_signal === 'Bearish' ? "text-red-400" : "text-steel"}>
+                          {asset.key_metrics.macd_signal}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {isExpanded ? <ChevronUp className="w-4 h-4 text-steel" /> : <ChevronDown className="w-4 h-4 text-steel" />}
-              </button>
+
+                <div className="p-1.5 rounded-lg text-steel">
+                  {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                </div>
+              </div>
 
               {/* Expanded Detail */}
               {isExpanded && (
-                <div className="px-5 sm:px-6 pb-5 space-y-3 animate-in slide-in-from-top-2 duration-200">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {/* Technical */}
-                    <div className="bg-black/20 rounded-xl p-3.5 border border-white/5">
-                      <p className="text-[10px] uppercase tracking-wider text-steel mb-1.5 font-semibold">Technical</p>
-                      <p className="text-sm text-marble/90 leading-relaxed">{asset.technical_summary}</p>
+                <div className="px-5 sm:px-6 pb-6 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Technical Strategy */}
+                    <div className="bg-black/20 rounded-2xl p-4 border border-white/5 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-3 opacity-10">
+                        <TrendingUp className="w-8 h-8 text-blue-400" />
+                      </div>
+                      <h4 className="text-[10px] uppercase tracking-[0.2em] text-blue-400 mb-3 font-bold">Technical Outlook</h4>
+                      <ul className="space-y-2">
+                        {Array.isArray(asset.technical_bullets) ? asset.technical_bullets.map((bullet, idx) => (
+                          <li key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
+                            <span className="text-blue-500/50 mt-1">•</span>
+                            {bullet}
+                          </li>
+                        )) : <li className="text-sm text-steel">No technical data available.</li>}
+                      </ul>
                     </div>
-                    {/* Fundamental */}
-                    <div className="bg-black/20 rounded-xl p-3.5 border border-white/5">
-                      <p className="text-[10px] uppercase tracking-wider text-steel mb-1.5 font-semibold">Fundamental</p>
-                      <p className="text-sm text-marble/90 leading-relaxed">{asset.fundamental_summary}</p>
+
+                    {/* Fundamental Core */}
+                    <div className="bg-black/20 rounded-2xl p-4 border border-white/5 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-3 opacity-10">
+                        <Sparkles className="w-8 h-8 text-purple-400" />
+                      </div>
+                      <h4 className="text-[10px] uppercase tracking-[0.2em] text-purple-400 mb-3 font-bold">Fundamental Health</h4>
+                      <ul className="space-y-2">
+                        {Array.isArray(asset.fundamental_bullets) ? asset.fundamental_bullets.map((bullet, idx) => (
+                          <li key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
+                            <span className="text-purple-500/50 mt-1">•</span>
+                            {bullet}
+                          </li>
+                        )) : <li className="text-sm text-steel">No fundamental data available.</li>}
+                      </ul>
                     </div>
                   </div>
-                  {/* Catalyst */}
-                  {asset.catalyst && (
-                    <div className="bg-amber-500/5 rounded-xl p-3 border border-amber-500/10">
-                      <p className="text-xs text-amber-400/80">
-                        <span className="font-semibold">🔍 Catalyst:</span> {asset.catalyst}
-                      </p>
-                    </div>
-                  )}
-                  {/* Action Note */}
-                  {asset.action_note && (
-                    <p className="text-xs text-steel/70 italic pl-1">💡 {asset.action_note}</p>
-                  )}
+
+                  {/* Footer Row: Catalyst & Action */}
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    {asset.catalyst && (
+                      <div className="flex-1 bg-amber-500/5 rounded-xl px-4 py-3 border border-amber-500/10 flex items-start gap-3">
+                        <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                        <p className="text-xs text-amber-200/80 leading-relaxed">
+                          <span className="font-bold text-amber-400 mr-1">WATCH CATALYST:</span>
+                          {asset.catalyst}
+                        </p>
+                      </div>
+                    )}
+                    {asset.action_note && (
+                      <div className="flex-1 bg-blue-500/5 rounded-xl px-4 py-3 border border-blue-500/10 flex items-start gap-3">
+                        <Sparkles className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                        <p className="text-xs text-blue-200/80 leading-relaxed italic">
+                          {asset.action_note}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

@@ -233,13 +233,19 @@ Return a valid JSON object with this EXACT structure:
     {
       "symbol": "TICKER",
       "verdict": "BULLISH" | "BEARISH" | "NEUTRAL" | "CAUTION",
-      "technical_summary": "1-2 sentences on RSI, MACD, moving averages",
-      "fundamental_summary": "1-2 sentences on valuation, earnings, growth",
-      "catalyst": "Any upcoming event, news, or institutional activity to watch",
-      "action_note": "Brief, neutral, educational observation (NOT financial advice)"
+      "key_metrics": {
+        "rsi": 45.2,
+        "pe_ratio": 22.5,
+        "macd_signal": "Bullish" | "Bearish" | "Neutral",
+        "trend_50d": "Above" | "Below" | "Cross"
+      },
+      "technical_bullets": ["Structured bullet point 1", "Structured bullet point 2"],
+      "fundamental_bullets": ["Structured bullet point 1", "Structured bullet point 2"],
+      "catalyst": "Brief upcoming event or news",
+      "action_note": "Brief, neutral, educational observation"
     }
   ],
-  "overall_insight": "2-3 sentence portfolio-level takeaway for the user"
+  "overall_insight": "2-3 sentence portfolio-level takeaway"
 }
 
 IMPORTANT: Return ONLY the JSON object. No markdown, no code fences, no explanation outside the JSON."""
@@ -339,13 +345,34 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
             tech_summary = f"RSI at {rsi_str}. No strong directional signal."
 
         pe = fund.get("pe_ratio")
-        fund_summary = f"P/E: {pe:.1f}" if pe is not None else "Fundamental data limited"
+        
+        # Build key metrics
+        key_metrics = {
+            "rsi": round(rsi, 1) if rsi is not None else None,
+            "pe_ratio": round(pe, 1) if pe is not None else None,
+            "macd_signal": trend,
+            "trend_50d": "Above" if (rsi and rsi > 50) else "Below"
+        }
+
+        # Build bullet points
+        tech_bullets = [
+            tech_summary,
+            f"MACD is showing {trend.lower()} momentum.",
+            f"Volume appears {'stable' if rsi else 'limited'} on recent candles."
+        ]
+        
+        fund_bullets = [
+            f"P/E Ratio: {pe:.1f}" if pe is not None else "Valuation data is currently limited.",
+            "Revenue growth trend for this sector remains robust.",
+            "Institutional interest is currently in a consolidation phase."
+        ]
 
         assets.append({
             "symbol": sym,
             "verdict": verdict,
-            "technical_summary": tech_summary,
-            "fundamental_summary": fund_summary,
+            "key_metrics": key_metrics,
+            "technical_bullets": tech_bullets,
+            "fundamental_bullets": fund_bullets,
             "catalyst": "Earnings season approaching — watch for guidance updates.",
             "action_note": "This is a simulated report. Connect your Anthropic API key for live AI analysis."
         })
