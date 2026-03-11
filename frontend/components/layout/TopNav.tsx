@@ -48,10 +48,11 @@ export function TopNav() {
               <span className="text-xs text-steel/50 hidden sm:block">Guest</span>
               <button 
                 onClick={() => openAuthModal("register")}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 text-steel hover:text-marble hover:border-white/20 transition-all text-xs font-semibold"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 text-steel hover:text-marble hover:border-white/20 transition-all text-xs font-semibold"
               >
-                <LogIn className="w-3.5 h-3.5" />
-                Create Account
+                <LogIn className="w-3.5 h-3.5 hidden sm:inline-block" />
+                <span className="hidden sm:inline">Create Account</span>
+                <span className="sm:hidden">Create</span>
               </button>
               <button 
                 onClick={logout}
