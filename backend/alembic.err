@@ -1,0 +1,161 @@
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 374a31c63bfa -> d3183c7d6837, Add_user_watchlist_fixed
+Traceback (most recent call last):
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 557, in _prepare_and_execute
+    self._rows = await prepared_stmt.fetch(*parameters)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\asyncpg\prepared_stmt.py", line 176, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\asyncpg\prepared_stmt.py", line 241, in __bind_execute
+    data, status, _ = await self.__do_execute(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\asyncpg\prepared_stmt.py", line 230, in __do_execute
+    return await executor(protocol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "asyncpg\protocol\protocol.pyx", line 207, in bind_execute
+asyncpg.exceptions.DatatypeMismatchError: foreign key constraint "user_watchlists_user_id_fkey" cannot be implemented
+DETAIL:  Key columns "user_id" and "id" are of incompatible types: integer and uuid.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 922, in do_execute
+    cursor.execute(statement, parameters)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 591, in execute
+    self._adapt_connection.await_(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 125, in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 185, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 569, in _prepare_and_execute
+    self._handle_exception(error)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 520, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 808, in _handle_exception
+    raise translated_error from error
+sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: <class 'asyncpg.exceptions.DatatypeMismatchError'>: foreign key constraint "user_watchlists_user_id_fkey" cannot be implemented
+DETAIL:  Key columns "user_id" and "id" are of incompatible types: integer and uuid.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Scripts\alembic.exe\__main__.py", line 7, in <module>
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\config.py", line 630, in main
+    CommandLine(prog=prog).main(argv=argv)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\config.py", line 624, in main
+    self.run_cmd(cfg, options)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\config.py", line 601, in run_cmd
+    fn(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\command.py", line 398, in upgrade
+    script.run_env()
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\script\base.py", line 579, in run_env
+    util.load_python_file(self.dir, "env.py")
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\util\pyfiles.py", line 93, in load_python_file
+    module = load_module_py(module_id, path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\util\pyfiles.py", line 109, in load_module_py
+    spec.loader.exec_module(module)  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\alembic\env.py", line 103, in <module>
+    run_migrations_online()
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\alembic\env.py", line 97, in run_migrations_online
+    asyncio.run(run_async_migrations())
+  File "C:\Users\Drew Suski\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\alembic\env.py", line 89, in run_async_migrations
+    await connection.run_sync(do_run_migrations)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\ext\asyncio\engine.py", line 886, in run_sync
+    return await greenlet_spawn(fn, self._proxied, *arg, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 192, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\alembic\env.py", line 73, in do_run_migrations
+    context.run_migrations()
+  File "<string>", line 8, in run_migrations
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\runtime\environment.py", line 938, in run_migrations
+    self.get_context().run_migrations(**kw)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\runtime\migration.py", line 624, in run_migrations
+    step.migration_fn(**kw)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\alembic\versions\d3183c7d6837_add_user_watchlist_fixed.py", line 23, in upgrade
+    op.create_table('user_watchlists',
+  File "<string>", line 8, in create_table
+  File "<string>", line 3, in create_table
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\operations\ops.py", line 1303, in create_table
+    return operations.invoke(op)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\operations\base.py", line 393, in invoke
+    return fn(self, operation)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\operations\toimpl.py", line 128, in create_table
+    operations.impl.create_table(table)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\ddl\impl.py", line 359, in create_table
+    self._exec(schema.CreateTable(table))
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\alembic\ddl\impl.py", line 200, in _exec
+    return conn.execute(construct, multiparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1416, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\sql\ddl.py", line 181, in _execute_on_connection
+    return connection._execute_ddl(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1528, in _execute_ddl
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1848, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1988, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 2343, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 922, in do_execute
+    cursor.execute(statement, parameters)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 591, in execute
+    self._adapt_connection.await_(
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 125, in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 185, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 569, in _prepare_and_execute
+    self._handle_exception(error)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 520, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "C:\Users\Drew Suski\.gemini\antigravity\scratch\analyzer-project\backend\venv\Lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 808, in _handle_exception
+    raise translated_error from error
+sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.DatatypeMismatchError'>: foreign key constraint "user_watchlists_user_id_fkey" cannot be implemented
+DETAIL:  Key columns "user_id" and "id" are of incompatible types: integer and uuid.
+[SQL: 
+CREATE TABLE user_watchlists (
+	user_id INTEGER NOT NULL, 
+	asset_id UUID NOT NULL, 
+	added_at TIMESTAMP WITH TIME ZONE DEFAULT now(), 
+	PRIMARY KEY (user_id, asset_id), 
+	FOREIGN KEY(asset_id) REFERENCES assets (id) ON DELETE CASCADE, 
+	FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+)
+
+]
+(Background on this error at: https://sqlalche.me/e/20/f405)
