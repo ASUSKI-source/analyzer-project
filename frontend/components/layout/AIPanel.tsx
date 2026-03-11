@@ -1,11 +1,27 @@
 "use client";
 
 import { MessageSquare, X, Send } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export function AIPanel() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const handleOpen = () => setIsOpen(true);
+    window.addEventListener("open-ai-panel", handleOpen);
+    
+    // Check mobile
+    const checkMobile = () => setIsMobile(window.innerWidth < 640);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    
+    return () => {
+      window.removeEventListener("open-ai-panel", handleOpen as EventListener);
+      window.removeEventListener("resize", checkMobile);
+    };
+  }, []);
 
   return (
     <>
@@ -33,12 +49,17 @@ export function AIPanel() {
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
+            initial={isMobile ? { y: "100%" } : { x: "100%" }}
+            animate={isMobile ? { y: 0 } : { x: 0 }}
+            exit={isMobile ? { y: "100%" } : { x: "100%" }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="fixed top-0 right-0 h-screen w-full sm:w-[420px] true-glass !rounded-none !border-t-0 !border-r-0 !border-b-0 shadow-[0_0_60px_rgba(0,0,0,0.8)] z-50 flex flex-col"
+            className="fixed bottom-0 sm:bottom-auto sm:top-0 right-0 h-[85vh] sm:h-screen w-full sm:w-[420px] true-glass sm:!rounded-none !rounded-t-3xl sm:!border-t-0 sm:!border-r-0 sm:!border-b-0 border border-white/10 shadow-[0_-20px_60px_rgba(0,0,0,0.8)] sm:shadow-[0_0_60px_rgba(0,0,0,0.8)] z-50 flex flex-col"
           >
+            {/* Grab Handle for Mobile */}
+            <div className="sm:hidden w-full flex justify-center pt-3 pb-1 -mb-1 bg-black/20 rounded-t-3xl">
+              <div className="w-12 h-1.5 bg-white/20 rounded-full" />
+            </div>
+
             {/* Panel Header */}
             <div className="flex items-center justify-between p-5 border-b border-glass-border bg-black/20">
               <div className="flex items-center gap-3">

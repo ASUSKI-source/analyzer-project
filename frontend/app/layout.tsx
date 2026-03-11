@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { TopNav } from "@/components/layout/TopNav";
 import { AIPanel } from "@/components/layout/AIPanel";
+import { BottomNav } from "@/components/layout/BottomNav";
 import { Background } from "@/components/layout/Background";
 import { ClientProviders } from "@/providers/ClientProviders";
 
@@ -36,10 +37,11 @@ export default function RootLayout({
           <TopNav />
           {/* Main layout container allows the AI Panel to overlay */}
           <div className="flex flex-1 relative overflow-hidden h-full">
-            <main className="flex-1 overflow-y-auto px-6 xl:px-8 max-w-[1600px] w-full mx-auto py-8">
+            <main className="flex-1 overflow-y-auto px-6 xl:px-8 max-w-[1600px] w-full mx-auto py-8 pb-24 sm:pb-8">
               {children}
             </main>
             <AIPanel />
+            <BottomNav />
           </div>
         </ClientProviders>
       </body>

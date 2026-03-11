@@ -105,11 +105,11 @@ export default function Home() {
         {/* Market Overview Hero (Wider Column) */}
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           {/* Quick Stats Row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 pb-2 -mx-6 px-6 no-scrollbar sm:grid sm:grid-cols-4 sm:mx-0 sm:px-0 sm:pb-0 sm:overflow-visible sm:snap-none">
             {data?.market_overview ? (
               data.market_overview.map((item) => (
+                <div key={item.symbol} className="min-w-[85vw] sm:min-w-0 snap-center sm:snap-align-none shrink-0 sm:shrink">
                   <StatCard 
-                    key={item.symbol} 
                     title={item.symbol} 
                     rawPrice={item.price}
                     value={item.price > 1000 ? `$${item.price.toLocaleString(undefined, {minimumFractionDigits: 2})}` : `$${item.price.toFixed(item.price < 5 ? 4 : 2)}`}
@@ -118,11 +118,14 @@ export default function Home() {
                     onClick={() => setSelectedAsset(item.symbol)}
                     isSelected={selectedAsset === item.symbol}
                   />
-                ))
+                </div>
+              ))
             ) : (
               // Loading placeholders
               Array.from({length: 4}).map((_, i) => (
-                <div key={i} className="true-glass rounded-xl p-4 h-24 animate-pulse bg-white/5" />
+                <div key={i} className="min-w-[85vw] sm:min-w-0 snap-center sm:snap-align-none shrink-0 sm:shrink">
+                  <div className="true-glass rounded-xl p-4 h-24 animate-pulse bg-white/5" />
+                </div>
               ))
             )}
           </div>
