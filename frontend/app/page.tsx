@@ -76,7 +76,7 @@ export default function Home() {
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
       
       {/* Page Header (Sticky on Mobile) */}
-      <div className="sticky top-[64px] z-30 -mx-6 px-6 py-4 bg-slate-950/80 backdrop-blur-xl border-b border-white/5 sm:relative sm:top-0 sm:bg-transparent sm:backdrop-blur-none sm:border-none sm:p-0 sm:mx-0">
+      <div className="sticky top-[-32px] z-30 -mx-6 px-6 py-4 bg-slate-950/80 backdrop-blur-xl border-b border-white/5 sm:relative sm:top-0 sm:bg-transparent sm:backdrop-blur-none sm:border-none sm:p-0 sm:mx-0">
         <div className="flex flex-col gap-2 relative">
           <h1 className="text-3xl font-bold tracking-tight text-marble">Market Overview</h1>
           <p className="text-steel flex items-center gap-2 text-sm">
@@ -180,7 +180,7 @@ export default function Home() {
           <div className="true-glass rounded-2xl p-4 sm:p-6 min-h-[250px] sm:min-h-[500px] relative overflow-hidden group/watchlist">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-50" />
             
-            <div className="flex items-center justify-between mb-6 relative sticky top-0 z-10 bg-black/40 -mx-4 px-4 py-2 sm:bg-transparent sm:mx-0 sm:px-0 sm:py-0 sm:relative backdrop-blur-md rounded-lg sm:rounded-none">
+            <div className="flex items-center justify-between mb-6 relative sticky top-[-32px] z-20 bg-[#06090e]/95 sm:-mx-0 sm:px-0 sm:py-0 sm:relative sm:bg-transparent -mx-4 px-4 py-3 backdrop-blur-xl border-b border-white/5 sm:border-none rounded-t-2xl sm:rounded-none">
               <h2 className="text-lg font-semibold text-marble flex items-center gap-2">
                 Watchlist
                 <span className={`flex h-2 w-2 rounded-full ${loading ? 'bg-steel animate-pulse' : 'bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]'}`}></span>
