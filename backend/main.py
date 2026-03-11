@@ -44,12 +44,16 @@ async def startup_event():
     
     # Auto-create database tables on first boot (safe to run repeatedly — 
     # create_all only creates tables that don't already exist).
-    from app.models.base import Base
-    from app.models import user, market, portfolio  # noqa: F401 — force model registration
-    from app.core.database import engine
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables verified/created.")
+    try:
+        from app.models.base import Base
+        from app.models import user, market, portfolio  # noqa: F401 — force model registration
+        from app.core.database import engine
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created.")
+    except Exception as e:
+        logger.error(f"Failed to connect to database at startup: {e}")
+        logger.warning("Backend is running in 'Degraded Mode' (no database features).")
 
 @app.on_event("shutdown")
 async def shutdown_event():
