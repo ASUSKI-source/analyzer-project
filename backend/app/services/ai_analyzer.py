@@ -294,25 +294,26 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any]) -> D
 
         rsi = ti.get("rsi_14")
         trend = ti.get("trend_signal", "Neutral")
+        rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
 
-        if rsi and rsi > 70:
+        if rsi is not None and rsi > 70:
             verdict = "CAUTION"
-            tech_summary = f"RSI at {rsi:.1f} — technically overbought. Watch for pullback."
-        elif rsi and rsi < 30:
+            tech_summary = f"RSI at {rsi_str} — technically overbought. Watch for pullback."
+        elif rsi is not None and rsi < 30:
             verdict = "BULLISH"
-            tech_summary = f"RSI at {rsi:.1f} — oversold territory. Potential bounce ahead."
+            tech_summary = f"RSI at {rsi_str} — oversold territory. Potential bounce ahead."
         elif trend == "Bullish":
             verdict = "BULLISH"
-            tech_summary = f"RSI at {rsi:.1f if rsi else 'N/A'} with bullish MACD crossover."
+            tech_summary = f"RSI at {rsi_str} with bullish MACD crossover."
         elif trend == "Bearish":
             verdict = "BEARISH"
-            tech_summary = f"RSI at {rsi:.1f if rsi else 'N/A'} with bearish MACD divergence."
+            tech_summary = f"RSI at {rsi_str} with bearish MACD divergence."
         else:
             verdict = "NEUTRAL"
-            tech_summary = f"RSI at {rsi:.1f if rsi else 'N/A'}. No strong directional signal."
+            tech_summary = f"RSI at {rsi_str}. No strong directional signal."
 
         pe = fund.get("pe_ratio")
-        fund_summary = f"P/E: {pe:.1f}" if pe else "Fundamental data limited"
+        fund_summary = f"P/E: {pe:.1f}" if pe is not None else "Fundamental data limited"
 
         assets.append({
             "symbol": sym,
