@@ -1,14 +1,78 @@
 """
 Technical Indicators Service — Computes signals and indicators using pandas and ta.
 Future-proofed for automated trading and deep-dive analysis.
+
+Multi-tier caching:
+  - get_cached_indicators(symbol) → cached for 4 hours (14,400s)
+  - compute_technical_indicators(candles) → raw, uncached computation
 """
 import logging
 import pandas as pd
 import ta
-from typing import List, Optional
+from typing import List, Dict, Any, Optional
 from app.schemas.market import TechnicalIndicators, HistoryDataPoint
+from app.core.cache import cache_client
 
 logger = logging.getLogger(__name__)
+
+# Cache TTL for technical indicators (4 hours)
+_INDICATOR_CACHE_TTL = 14_400
+
+
+async def get_cached_indicators(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    Async entry point for the AI analyzer.
+    Fetches historical candles, computes technical indicators,
+    and caches the result for 4 hours.
+    """
+    symbol = symbol.upper().strip()
+    cache_key = f"indicators_cache:{symbol}"
+
+    # 1. Try cache
+    cached = await cache_client.get(cache_key)
+    if cached:
+        return cached
+
+    # 2. Fetch candles
+    try:
+        from app.services.market_data import get_live_intraday_history
+        candles = await get_live_intraday_history(symbol, days=365)
+    except Exception as e:
+        logger.warning(f"Failed to fetch candles for cached indicators ({symbol}): {e}")
+        return None
+
+    if not candles or len(candles) < 20:
+        return None
+
+    # 3. Compute using existing function
+    ti = compute_technical_indicators(candles)
+
+    # 4. Serialize to dict for caching and AI consumption
+    result = {
+        "symbol": symbol,
+        "rsi_14": ti.rsi,
+        "macd_line": ti.macd,
+        "macd_signal": ti.macd_signal,
+        "macd_histogram": ti.macd_hist,
+        "sma_50": ti.sma_50,
+        "sma_200": ti.sma_200,
+        "bollinger_upper": ti.bollinger_upper,
+        "bollinger_lower": ti.bollinger_lower,
+        "trend_signal": ti.trend_signal,
+    }
+
+    # Compute RSI label
+    if ti.rsi is not None:
+        if ti.rsi >= 70:
+            result["rsi_signal"] = "OVERBOUGHT"
+        elif ti.rsi <= 30:
+            result["rsi_signal"] = "OVERSOLD"
+        else:
+            result["rsi_signal"] = "NEUTRAL"
+
+    await cache_client.set(cache_key, result, expire_seconds=_INDICATOR_CACHE_TTL)
+    logger.info(f"Cached indicators for {symbol} (4h TTL)")
+    return result
 
 def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     """

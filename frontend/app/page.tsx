@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { LandingAuth } from "@/components/auth/LandingAuth";
 import { API_BASE_URL } from "@/services/api_client";
 import { useWatchlist } from "@/hooks/useWatchlist";
+import { AnalysisReportPanel } from "@/components/features/AnalysisReportPanel";
 
 export default function Home() {
   const { data, loading, refreshing, lastUpdated, error } = useDashboardPulse();
@@ -176,6 +177,14 @@ export default function Home() {
                />
             </div>
           </div>
+
+          {/* AI Analysis Report Panel (Auth Users Only) */}
+          {user && !isGuest && (
+            <AnalysisReportPanel 
+              symbols={userSymbols.map(s => s.symbol)} 
+              onSelectAsset={(sym) => setSelectedAsset(sym)} 
+            />
+          )}
         </div>
 
         {/* Watchlist Sidebar (Narrow Column) */}
