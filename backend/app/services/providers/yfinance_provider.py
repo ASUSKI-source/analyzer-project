@@ -34,9 +34,19 @@ class YFinanceProvider(BaseProvider):
         to avoid blocking the FastAPI event loop.
         """
         try:
-            results = await asyncio.to_thread(self._sync_fetch, symbols)
+            # yfinance internally uses requests.get without timeouts for some lazy properties.
+            # We MUST wrap and strictly timeout the thread, else it will hang the entire endpoint 
+            # if Yahoo tarpits the connection on cloud IPs.
+            results = await asyncio.wait_for(
+                asyncio.to_thread(self._sync_fetch, symbols),
+                timeout=10.0
+            )
             self.record_success()
             return results
+        except asyncio.TimeoutError:
+            self.record_failure()
+            logger.warning(f"[{self.name}] yfinance thread execution timed out after 10s (Yahoo likely blocking IP).")
+            return []
         except Exception as e:
             self.record_failure()
             logger.warning(f"[{self.name}] yfinance error: {e}")
