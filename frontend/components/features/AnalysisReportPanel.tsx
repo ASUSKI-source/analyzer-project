@@ -44,7 +44,10 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
 
     try {
       const symbolStr = symbols.join(",");
-      const res = await fetch(`${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`);
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`, {
+        headers: token ? { "Authorization": `Bearer ${token}` } : {}
+      });
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const data: AIReport = await res.json();
       
