@@ -73,7 +73,7 @@ export function LandingAuth() {
             <span className="font-bold text-marble text-lg tracking-wider">AI</span>
           </div>
           <h2 className="text-3xl font-bold text-marble tracking-tight">
-            {mode === "login" ? "Welcome Back" : "Start Tracking Market Alpha"}
+            {mode === "login" ? "Welcome Back" : "A Game Changer in Financial Analysis"}
           </h2>
           <p className="text-steel text-sm mt-3">
             {mode === "login"
