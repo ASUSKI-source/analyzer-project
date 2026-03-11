@@ -38,6 +38,7 @@ _MODEL = "claude-3-haiku-20240307"  # Fast, cheap, smart enough for financial su
 async def generate_watchlist_report(
     symbols: List[str],
     user_id: str,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Assemble a comprehensive AI analysis report for the given watchlist symbols.
@@ -52,13 +53,29 @@ async def generate_watchlist_report(
     if not symbols:
         return {"error": "No symbols provided", "assets": []}
 
-    # ── 1. Check Report Cache ────────────────────────────────────────────────
+    # ── 1. Check Report Cache (Skip if refresh=True) ─────────────────────────
     cache_key = _report_cache_key(user_id, symbols)
-    cached = await cache_client.get(cache_key)
-    if cached:
-        logger.info(f"AI report cache HIT for user {user_id}")
-        cached["from_cache"] = True
-        return cached
+    if not refresh:
+        cached = await cache_client.get(cache_key)
+        if cached:
+            logger.info(f"AI report cache HIT for user {user_id}")
+            cached["from_cache"] = True
+            return cached
+    else:
+        # Security: Implement 5-minute Hard Refresh Cooldown to protect API budget
+        cooldown_key = f"ai_refresh_cooldown:{user_id}"
+        cooldown_ttl = await cache_client.get_ttl(cooldown_key)
+        if cooldown_ttl > 0:
+            logger.warning(f"AI refresh cooldown active for user {user_id} ({cooldown_ttl}s remaining)")
+            return {
+                "error": "Refresh cooldown active. You can force a fresh analysis once every 5 minutes.",
+                "cooldown_remaining": cooldown_ttl,
+                "assets": []
+            }
+        
+        logger.info(f"AI report cache BYPASS (force refresh) for user {user_id}")
+        # Set cooldown (300s = 5m)
+        await cache_client.set(cooldown_key, "active", expire_seconds=300)
 
     logger.info(f"AI report cache MISS for user {user_id}. Generating report for {symbols}...")
 

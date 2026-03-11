@@ -83,6 +83,25 @@ class CacheClient:
         self._fallback_cache.clear()
 
 
+    async def get_ttl(self, key: str) -> int:
+        """Returns remaining TTL in seconds or -1 if no TTL/key doesn't exist."""
+        if self.redis:
+            try:
+                return await self.redis.ttl(key)
+            except Exception as e:
+                logger.error(f"Redis ttl error: {e}")
+                return self._get_ttl_fallback(key)
+        else:
+            return self._get_ttl_fallback(key)
+
+    def _get_ttl_fallback(self, key: str) -> int:
+        import time
+        if key in self._fallback_cache:
+            entry = self._fallback_cache[key]
+            remaining = int(entry.get("expires_at", 0) - time.time())
+            return max(0, remaining)
+        return -1
+
     async def close(self):
         if self.redis:
             await self.redis.aclose()

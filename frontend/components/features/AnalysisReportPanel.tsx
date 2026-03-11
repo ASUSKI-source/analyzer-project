@@ -23,6 +23,7 @@ interface AIReport {
   generated_at?: string;
   from_cache?: boolean;
   _mock?: boolean;
+  cooldown_remaining?: number;
   error?: string;
 }
 
@@ -37,7 +38,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
 
-  const fetchReport = useCallback(async () => {
+  const fetchReport = useCallback(async (forceRefresh = false) => {
     if (symbols.length === 0) return;
     setLoading(true);
     setError(null);
@@ -45,10 +46,11 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
     try {
       const symbolStr = symbols.join(",");
       const token = localStorage.getItem("token");
-      const res = await fetch(`${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`, {
+      const url = `${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}${forceRefresh ? "&refresh=true" : ""}`;
+      
+      const res = await fetch(url, {
         headers: token ? { "Authorization": `Bearer ${token}` } : {}
       });
-      if (!res.ok) throw new Error(`API error: ${res.status}`);
       const data: AIReport = await res.json();
       
       if (data.error && !data.assets?.length) {
@@ -123,7 +125,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
           )}
 
           <button
-            onClick={fetchReport}
+            onClick={() => fetchReport(false)}
             disabled={symbols.length === 0}
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-blue-500/20 to-blue-600/20 border border-blue-500/30 text-blue-400 font-semibold text-sm hover:from-blue-500/30 hover:to-blue-600/30 hover:border-blue-400/50 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(59,130,246,0.15)]"
           >
@@ -198,9 +200,9 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
             </div>
             {/* Refresh */}
             <button
-              onClick={fetchReport}
+              onClick={() => fetchReport(true)}
               className="p-2 rounded-lg bg-white/5 border border-white/10 text-steel hover:text-marble hover:bg-white/10 transition-all"
-              title="Regenerate analysis"
+              title="Regenerate analysis (Force Refresh)"
             >
               <RefreshCw className="w-4 h-4" />
             </button>

@@ -26,7 +26,8 @@ _ENDPOINT_TIMEOUT = 25.0  # seconds
 async def get_watchlist_analysis(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    symbols: Optional[str] = Query(None, description="Comma-separated symbols to analyze (overrides watchlist)")
+    symbols: Optional[str] = Query(None, description="Comma-separated symbols to analyze (overrides watchlist)"),
+    refresh: bool = Query(False, description="Force a fresh analysis by bypassing the cache")
 ):
     """
     Generate an AI-powered analysis of the user's watchlist.
@@ -59,7 +60,7 @@ async def get_watchlist_analysis(
     # before the proxy drops us — preventing the phantom CORS error.
     try:
         report = await asyncio.wait_for(
-            generate_watchlist_report(symbols=symbol_list, user_id=user_id),
+            generate_watchlist_report(symbols=symbol_list, user_id=user_id, refresh=refresh),
             timeout=_ENDPOINT_TIMEOUT,
         )
     except asyncio.TimeoutError:
