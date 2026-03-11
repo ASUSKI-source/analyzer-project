@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Main FastAPI server instance
 app = FastAPI(title="Stocks/Crypto AI Analyzer")
 
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+
 # Set up CORS for the Next.js frontend
 origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:
