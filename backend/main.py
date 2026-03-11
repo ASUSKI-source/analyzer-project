@@ -17,13 +17,12 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
 # Set up CORS for the Next.js frontend
-origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
-if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:
-    origins.append(settings.FRONTEND_URL)
-
+# IMPORTANT: The CORS spec forbids allow_origins=["*"] with allow_credentials=True.
+# Using allow_origin_regex to match all origins while still echoing back the specific
+# requesting origin, which is required when credentials (cookies/auth headers) are involved.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
