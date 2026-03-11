@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 _INDICATOR_CACHE_TTL = 14_400
 
 
-async def get_cached_indicators(symbol: str, timeframe: str = "1d") -> Optional[Dict[str, Any]]:
+async def get_cached_indicators(
+    symbol: str, 
+    timeframe: str = "1d", 
+    db: Optional[Any] = None
+) -> Optional[Dict[str, Any]]:
     """
     Async entry point for the AI analyzer and other services.
     Fetches historical candles for a specific horizon (1h, 1d, 1w),
@@ -37,19 +41,74 @@ async def get_cached_indicators(symbol: str, timeframe: str = "1d") -> Optional[
         return cached
 
     # 2. Map timeframe to lookback days
-    # 1h: 5 days of data (plenty for intraday RSI/MACD)
-    # 1d: 365 days (standard Daily view)
-    # 1w: 730 days (Strategic Weekly view)
     lookback_map = {"1h": 5, "1d": 365, "1w": 730}
     days = lookback_map.get(timeframe, 365)
 
-    # 3. Fetch candles
-    try:
-        from app.services.market_data import get_live_intraday_history
-        candles = await get_live_intraday_history(symbol, days=days)
-    except Exception as e:
-        logger.warning(f"Failed to fetch candles for cached indicators ({symbol}, {timeframe}): {e}")
-        return None
+    # 3. Data Gathering Strategy
+    candles = []
+    
+    # NEW PERFORMANCE RAIL: Use local DB for Daily and Weekly (Strategic) horizons
+    # This avoids hitting external API rate limits for larger watchlists.
+    if timeframe in ["1d", "1w"] and db:
+        try:
+            from sqlalchemy import select, and_
+            from datetime import datetime, timedelta
+            from app.models.market import Asset, AssetCandle
+            
+            # Find asset ID
+            q = select(Asset.id).where(Asset.symbol == symbol)
+            res = await db.execute(q)
+            asset_id = res.scalar_one_or_none()
+            
+            if asset_id:
+                since = datetime.now() - timedelta(days=days)
+                cq = select(AssetCandle).where(
+                    and_(AssetCandle.asset_id == asset_id, AssetCandle.timestamp >= since)
+                ).order_by(AssetCandle.timestamp.asc())
+                
+                cres = await db.execute(cq)
+                db_candles = cres.scalars().all()
+                
+                if len(db_candles) >= 40: # Need enough for SMA 200 checks eventually
+                    candles = [
+                        {
+                            "time": c.timestamp.isoformat(),
+                            "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume
+                        }
+                        for c in db_candles
+                    ]
+                    logger.info(f"Using DB-backed candles for {symbol} ({timeframe}) - {len(candles)} points")
+                    
+                    # 4. WEEKLY RESAMPLING (Strategic Horizon)
+                    if timeframe == "1w" and len(candles) > 0:
+                        df = pd.DataFrame(candles)
+                        df['time'] = pd.to_datetime(df['time'])
+                        df.set_index('time', inplace=True)
+                        
+                        # Resample to weekly (Monday start)
+                        resampled = df.resample('W-MON').agg({
+                            'open': 'first',
+                            'high': 'max',
+                            'low': 'min',
+                            'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
+                        
+                        candles = resampled.reset_index().to_dict('records')
+                        for c in candles:
+                            c['time'] = c['time'].isoformat()
+                        logger.info(f"Resampled to {len(candles)} weekly candles for {symbol}")
+        except Exception as db_err:
+            logger.error(f"Fallback to live: DB indicator fetch failed for {symbol}: {db_err}")
+
+    # Fallback to Live for 1h or if DB is empty/fails
+    if not candles:
+        try:
+            from app.services.market_data import get_live_intraday_history
+            candles = await get_live_intraday_history(symbol, days=days)
+        except Exception as e:
+            logger.warning(f"Failed to fetch candles for cached indicators ({symbol}, {timeframe}): {e}")
+            return None
 
     if not candles or len(candles) < 20:
         return None

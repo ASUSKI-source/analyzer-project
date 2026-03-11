@@ -60,7 +60,7 @@ async def get_watchlist_analysis(
     # before the proxy drops us — preventing the phantom CORS error.
     try:
         report = await asyncio.wait_for(
-            generate_watchlist_report(symbols=symbol_list, user_id=user_id, refresh=refresh),
+            generate_watchlist_report(symbols=symbol_list, user_id=user_id, db=db, refresh=refresh),
             timeout=_ENDPOINT_TIMEOUT,
         )
     except asyncio.TimeoutError:

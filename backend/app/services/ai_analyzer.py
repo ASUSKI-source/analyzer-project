@@ -19,6 +19,7 @@ import httpx
 
 from app.core.cache import cache_client
 from app.core.config import settings
+from app.utils.http import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,11 @@ _MODEL = "claude-haiku-4-5"  # Fast, cheap, smart enough for financial summaries
 async def generate_watchlist_report(
     symbols: List[str],
     user_id: str,
+    db: Any,
     refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Assemble a comprehensive AI analysis report for the given watchlist symbols.
-
-    Steps:
-      1. Check 8-hour report cache.
-      2. Gather Tier-1 (prices), Tier-2 (technicals), Tier-3 (fundamentals).
-      3. Inject into master prompt → send to Anthropic.
-      4. Parse structured JSON response, cache, and return.
     """
     symbols = [s.upper().strip() for s in symbols if s.strip()]
     if not symbols:
@@ -85,7 +81,7 @@ async def generate_watchlist_report(
     await cache_client.set(cooldown_key, "active", expire_seconds=300)
 
     # ── 2. Multi-Tier Data Assembly ──────────────────────────────────────────
-    data_context = await _assemble_data_context(symbols)
+    data_context = await _assemble_data_context(symbols, db)
 
     # ── 3. Call Anthropic ────────────────────────────────────────────────────
     report = await _call_anthropic(symbols, data_context)
@@ -105,7 +101,7 @@ async def generate_watchlist_report(
 # MULTI-TIER DATA ASSEMBLY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
+async def _assemble_data_context(symbols: List[str], db: Any) -> Dict[str, Any]:
     """
     Gathers data from three tiers concurrently:
       Tier 1: Live prices (DataBroker, 10s cache)
@@ -118,24 +114,31 @@ async def _assemble_data_context(symbols: List[str]) -> Dict[str, Any]:
     from app.services.indicators import get_cached_indicators
     from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment
 
-    # Tier 1: Live prices
-    price_task = get_broker().fetch_quotes(symbols)
+    # PERFORMANCE RAIL: Limit concurrency to avoid slamming DB/APIs
+    semaphore = asyncio.Semaphore(5)
 
-    # Tier 2: Technical indicators (3 horizons per symbol, independently cached)
+    async def _gather_with_semaphore(coro):
+        async with semaphore:
+            return await coro
+
+    # Tier 1: Live prices
+    price_task = _gather_with_semaphore(get_broker().fetch_quotes(symbols))
+
+    # Tier 2: Technical indicators (3 horizons per symbol)
+    # 1d and 1w now use the local DB session for much faster assembly
     indicator_tasks = []
     for sym in symbols:
-        indicator_tasks.append(get_cached_indicators(sym, "1h"))
-        indicator_tasks.append(get_cached_indicators(sym, "1d"))
-        indicator_tasks.append(get_cached_indicators(sym, "1w"))
+        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1h", db)))
+        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1d", db)))
+        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1w", db)))
 
-    # Tier 3: Fundamentals (individually cached for 12h)
-    fundamental_tasks = [_get_cached_fundamentals(sym) for sym in symbols]
+    # Tier 3: Fundamentals
+    fundamental_tasks = [_gather_with_semaphore(_get_cached_fundamentals(sym)) for sym in symbols]
 
     # Tier 3b: News sentiment
-    news_tasks = [fetch_news_sentiment(sym) for sym in symbols]
+    news_tasks = [_gather_with_semaphore(fetch_news_sentiment(sym)) for sym in symbols]
 
     # Execute all tiers with a strict timeout.
-    # Total tasks: price (1) + TI (3*n) + Fund (n) + News (n) = 1 + 5n tasks
     n = len(symbols)
     try:
         all_results = await asyncio.wait_for(
@@ -289,42 +292,43 @@ async def _call_anthropic(
 Provide your analysis following the output format specified in your system instructions."""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                _ANTHROPIC_API_URL,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": _MODEL,
-                    "max_tokens": 2048,
-                    "system": _MASTER_PROMPT,
-                    "messages": [
-                        {"role": "user", "content": user_message}
-                    ],
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        client = get_http_client()
+        response = await client.post(
+            _ANTHROPIC_API_URL,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": _MODEL,
+                "max_tokens": 2048,
+                "system": _MASTER_PROMPT,
+                "messages": [
+                    {"role": "user", "content": user_message}
+                ],
+            },
+            timeout=30.0
+        )
+        response.raise_for_status()
+        result = response.json()
 
-            # Extract the text content from Anthropic's response
-            text = result.get("content", [{}])[0].get("text", "")
+        # Extract the text content from Anthropic's response
+        text = result.get("content", [{}])[0].get("text", "")
 
-            # Parse JSON from the response
-            try:
-                report = json.loads(text)
+        # Parse JSON from the response
+        try:
+            report = json.loads(text)
+            return report
+        except json.JSONDecodeError:
+            # Try to extract JSON from markdown code fences
+            import re
+            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+            if json_match:
+                report = json.loads(json_match.group(1))
                 return report
-            except json.JSONDecodeError:
-                # Try to extract JSON from markdown code fences
-                import re
-                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
-                if json_match:
-                    report = json.loads(json_match.group(1))
-                    return report
-                logger.error(f"Failed to parse AI response as JSON: {text[:200]}")
-                return {"error": "AI returned non-JSON response", "raw_text": text[:500]}
+            logger.error(f"Failed to parse AI response as JSON: {text[:200]}")
+            return {"error": "AI returned non-JSON response", "raw_text": text[:500]}
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Anthropic API error: {e.response.status_code} - {e.response.text[:200]}")
