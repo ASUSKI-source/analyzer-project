@@ -3,6 +3,7 @@ AI Analysis Routes — Serves AI-powered watchlist reports.
 """
 import asyncio
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 from app.services.ai_analyzer import generate_watchlist_report
@@ -59,6 +61,9 @@ async def get_watchlist_analysis(
     user_id = str(current_user.id)
 
     request_id = str(uuid.uuid4())
+    route_started = time.monotonic()
+    log_prefix = f"[ai_report][user={user_id}][req={request_id}]"
+    logger.info(f"{log_prefix} route accepted symbols={symbol_list} refresh={refresh}")
 
     # Global timeout: Railway's proxy will kill our connection at ~30s.
     # We enforce 25s so we ALWAYS return a response (even a partial one)
@@ -76,10 +81,9 @@ async def get_watchlist_analysis(
         )
     except asyncio.TimeoutError:
         logger.error(
-            f"[ai_report][user={user_id}][req={request_id}] timed out after "
-            f"{_ENDPOINT_TIMEOUT}s for symbols={symbol_list}"
+            f"{log_prefix} timed out after {_ENDPOINT_TIMEOUT}s for symbols={symbol_list}"
         )
-        return {
+        timeout_response = {
             "market_summary": "Analysis timed out. This often happens if the data provider (Finnhub) is under heavy load or rate-limiting. We are currently optimizing data assembly to be more resilient.",
             "watchlist_health": "MIXED",
             "risk_level": "MODERATE",
@@ -89,6 +93,13 @@ async def get_watchlist_analysis(
             "_timeout": True,
             "_mock": False,
         }
+        if getattr(settings, "AI_DEBUG_TIMING", False):
+            timeout_response["_debug_timing"] = {
+                "request_id": request_id,
+                "route_seconds": round(time.monotonic() - route_started, 3),
+                "endpoint_timeout_seconds": _ENDPOINT_TIMEOUT,
+            }
+        return timeout_response
     except Exception as e:
         logger.error(f"AI report generation crashed: {e}", exc_info=True)
         return {
@@ -97,4 +108,10 @@ async def get_watchlist_analysis(
             "_mock": False,
         }
 
+    route_elapsed = time.monotonic() - route_started
+    logger.info(f"{log_prefix} route completed in {route_elapsed:.2f}s")
+    if getattr(settings, "AI_DEBUG_TIMING", False):
+        report.setdefault("_debug_timing", {})
+        report["_debug_timing"]["route_seconds"] = round(route_elapsed, 3)
+        report["_debug_timing"]["request_id"] = request_id
     return report

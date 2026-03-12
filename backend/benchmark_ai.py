@@ -1,48 +1,82 @@
 import asyncio
-import time
 import json
-from app.services.ai_analyzer import _assemble_data_context
+import time
+import uuid
+from statistics import mean
+
+from app.services.ai_analyzer import generate_watchlist_report
 from app.core.database import AsyncSessionLocal
 import logging
 
 # Mute noisy logs
 logging.getLogger("app.services").setLevel(logging.INFO)
 
-async def benchmark():
-    symbols = ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA", "BTC", "ETH"]
-    print(f"Starting benchmark for {len(symbols)} symbols...")
-    
-    async with AsyncSessionLocal() as db:
-        start_time = time.time()
+def percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, int(round((q / 100.0) * (len(ordered) - 1)))))
+    return ordered[idx]
+
+
+async def run_case(db, symbols: list[str], refresh: bool, runs: int) -> dict:
+    durations = []
+    sample_response = None
+    errors = 0
+
+    for i in range(runs):
+        user_id = f"bench-{len(symbols)}-{refresh}-{i}-{uuid.uuid4().hex[:8]}"
+        started = time.time()
         try:
-            context = await _assemble_data_context(symbols, db)
-            duration = time.time() - start_time
-            
-            summary = {
-                "status": "success",
-                "duration_seconds": duration,
-                "asset_count": len(context.get("assets", [])),
-                "assets": []
-            }
-            
-            for asset in context.get("assets", []):
-                sym = asset["symbol"]
-                has_fundamentals = bool(asset.get("fundamentals"))
-                has_news = bool(asset.get("news_sentiment", {}).get("trending_topics"))
-                summary["assets"].append({
-                    "symbol": sym,
-                    "price": asset.get("price"),
-                    "has_fundamentals": has_fundamentals,
-                    "has_news": has_news
-                })
-                
-            with open("benchmark_results.json", "w") as f:
-                json.dump(summary, f, indent=2)
-            
-            print(f"DONE. Duration: {duration:.2f}s. Results written to benchmark_results.json")
-                
-        except Exception as e:
-            print(f"FAILED: {e}")
+            response = await generate_watchlist_report(
+                symbols=symbols,
+                user_id=user_id,
+                db=db,
+                refresh=refresh,
+                request_id=f"bench-{uuid.uuid4().hex[:8]}",
+            )
+            sample_response = response
+            durations.append(time.time() - started)
+        except Exception:
+            errors += 1
+
+    return {
+        "symbols": symbols,
+        "symbol_count": len(symbols),
+        "refresh": refresh,
+        "runs": runs,
+        "errors": errors,
+        "p50_seconds": round(percentile(durations, 50), 3),
+        "p95_seconds": round(percentile(durations, 95), 3),
+        "mean_seconds": round(mean(durations), 3) if durations else 0.0,
+        "sample_parse_error": sample_response.get("parse_error") if isinstance(sample_response, dict) else None,
+        "sample_timeout": sample_response.get("_timeout") if isinstance(sample_response, dict) else None,
+    }
+
+
+async def benchmark():
+    scenarios = [
+        ["AAPL", "MSFT", "NVDA"],
+        ["AAPL", "MSFT", "NVDA", "GOOGL", "AMD"],
+        ["AAPL", "MSFT", "NVDA", "GOOGL", "AMD", "TSLA", "META", "AMZN", "NFLX", "BTC"],
+    ]
+    runs = 5
+
+    print("Starting AI benchmark matrix (3/5/10 symbols, refresh false/true)")
+    async with AsyncSessionLocal() as db:
+        results = []
+        for symbols in scenarios:
+            results.append(await run_case(db, symbols, refresh=False, runs=runs))
+            results.append(await run_case(db, symbols, refresh=True, runs=runs))
+
+    output = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "runs_per_case": runs,
+        "results": results,
+    }
+    with open("benchmark_results.json", "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
+    print("DONE. Wrote benchmark_results.json")
 
 if __name__ == "__main__":
     asyncio.run(benchmark())

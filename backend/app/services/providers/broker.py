@@ -5,6 +5,7 @@ Scores all registered providers by remaining_quota × speed_weight × reliabilit
 and picks the optimal one for each request. Falls back through providers on failure.
 """
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from app.services.providers.base_provider import BaseProvider
 
@@ -79,21 +80,36 @@ class DataBroker:
                 f"(score={provider.score:.1f}, quota={provider.remaining_quota})"
             )
 
+            batch_start = time.monotonic()
             try:
                 results = await provider.fetch_quotes(supported)
+                resolved_before = len(all_results)
                 for r in results:
                     sym = r.get("symbol", "").upper()
                     if sym and r.get("price", 0) > 0:
                         all_results[sym] = r
                         remaining_symbols.discard(sym)
+                elapsed = time.monotonic() - batch_start
+                resolved_now = len(all_results) - resolved_before
+                logger.info(
+                    f"[DataBroker] {provider.name} completed in {elapsed:.2f}s; "
+                    f"resolved_now={resolved_now}, unresolved_remaining={len(remaining_symbols)}"
+                )
             except Exception as e:
                 provider.record_failure()
+                elapsed = time.monotonic() - batch_start
                 logger.warning(f"[DataBroker] {provider.name} failed: {e}. "
-                              f"Falling back to next provider.")
+                              f"elapsed={elapsed:.2f}s. Falling back to next provider.")
 
         # If any symbols still unresolved, log it
         if remaining_symbols:
             logger.warning(f"[DataBroker] No provider could resolve: {remaining_symbols}")
+
+        total_resolved = len(all_results)
+        logger.info(
+            f"[DataBroker] completed request: requested={len(clean_symbols)}, "
+            f"resolved={total_resolved}, unresolved={len(remaining_symbols)}"
+        )
 
         # Return in original order, with zeroed-out entries for unresolved symbols
         return [

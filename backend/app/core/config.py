@@ -22,6 +22,13 @@ class Settings(BaseSettings):
 
     # Enable extra timing/debug metadata in AI responses (non-prod debugging).
     AI_DEBUG_TIMING: bool = False
+    AI_DEBUG_VERBOSE_LOGS: bool = False
+
+    # Timeout budgets for AI report generation pipeline.
+    AI_TOTAL_BUDGET_SECONDS: float = 24.0
+    AI_ASSEMBLY_BUDGET_SECONDS: float = 10.0
+    AI_MODEL_BUDGET_SECONDS: float = 12.0
+    AI_PARSE_BUDGET_SECONDS: float = 1.5
 
     # Config ensures Pydantic looks for a .env file and errors out if critical vars (like DATABASE_URL) are missing
     model_config = SettingsConfigDict(
