@@ -383,12 +383,23 @@ Provide your analysis following the output format specified in your system instr
                 len(text),
                 text[:200],
             )
-            # Fall back to a structured mock report rather than bubbling a hard error
-            return _generate_mock_report(
-                symbols,
-                data_context,
-                error_reason="Anthropic returned non-JSON response; using simulated analysis instead.",
-            )
+
+            # Best-effort fallback: preserve the real AI text in a structured envelope
+            # rather than discarding it or substituting a full mock.
+            max_len = 4000
+            truncated = text[:max_len] if isinstance(text, str) else ""
+            return {
+                "market_summary": "The AI engine returned an analysis that was not valid JSON. Showing the raw narrative instead.",
+                "watchlist_health": "MIXED",
+                "risk_level": "MODERATE",
+                "tactical_outlook": "See the detailed AI narrative for short-term context.",
+                "strategic_horizon": "See the detailed AI narrative for long-term context.",
+                "assets": [],
+                "overall_insight": truncated,
+                "_mock": False,
+                "parse_error": "Anthropic returned non-JSON response; using best-effort envelope.",
+                "raw_text": truncated,
+            }
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Anthropic API error: {e.response.status_code} - {e.response.text[:200]}")
