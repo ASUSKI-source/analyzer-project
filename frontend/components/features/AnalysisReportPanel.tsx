@@ -1,7 +1,17 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
-import { Sparkles, ChevronDown, ChevronUp, AlertTriangle, TrendingUp, TrendingDown, Minus, RefreshCw, Shield } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  Gauge,
+  Minus,
+  RefreshCw,
+  Shield,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import { API_BASE_URL } from "@/services/api_client";
 
 interface AssetAnalysis {
@@ -41,9 +51,98 @@ interface AIReport {
   error?: string;
 }
 
+interface AssetDeepAnalysis {
+  symbol: string;
+  technicals?: {
+    rsi?: number;
+    macd?: number;
+    macd_signal?: number;
+    sma_20?: number;
+    sma_50?: number;
+    sma_200?: number;
+    ema_9?: number;
+    ema_21?: number;
+    trend_signal?: string;
+  };
+  fundamentals?: {
+    pe_ratio?: number;
+    eps?: number;
+    beta?: number;
+    dividend_yield?: number;
+    market_cap?: number;
+    high_52week?: number;
+    low_52week?: number;
+  };
+  sentiment?: {
+    sentiment_score?: number;
+    trending_topics?: string[];
+  };
+  last_updated?: string;
+}
+
 interface Props {
   symbols: string[];
   onSelectAsset?: (symbol: string) => void;
+}
+
+type VerdictFilter = "ALL" | "BULLISH" | "BEARISH" | "NEUTRAL" | "CAUTION";
+type SortKey = "symbol" | "verdict" | "h1" | "d1" | "w1" | "rsi" | "macd" | "ema" | "pe" | "beta" | "catalyst";
+
+const HEALTH_COLORS: Record<string, string> = {
+  STRONG: "text-green-300",
+  MODERATE: "text-amber-300",
+  WEAK: "text-red-300",
+  MIXED: "text-blue-300",
+};
+
+const RISK_COLORS: Record<string, string> = {
+  LOW: "text-green-300",
+  MODERATE: "text-amber-300",
+  HIGH: "text-red-300",
+};
+
+const VERDICT_STYLE: Record<string, { text: string; bg: string; icon: React.ReactNode }> = {
+  BULLISH: {
+    text: "text-green-300",
+    bg: "bg-green-500/10 border-green-500/25",
+    icon: <TrendingUp className="w-3.5 h-3.5" />,
+  },
+  BEARISH: {
+    text: "text-red-300",
+    bg: "bg-red-500/10 border-red-500/25",
+    icon: <TrendingDown className="w-3.5 h-3.5" />,
+  },
+  NEUTRAL: {
+    text: "text-slate-300",
+    bg: "bg-white/5 border-white/15",
+    icon: <Minus className="w-3.5 h-3.5" />,
+  },
+  CAUTION: {
+    text: "text-amber-300",
+    bg: "bg-amber-500/10 border-amber-500/25",
+    icon: <AlertTriangle className="w-3.5 h-3.5" />,
+  },
+};
+
+function fmt(v?: number, d = 2): string {
+  if (v === undefined || v === null || Number.isNaN(v)) return "-";
+  return Number(v).toFixed(d);
+}
+
+function fmtCompact(v?: number): string {
+  if (v === undefined || v === null || Number.isNaN(v)) return "-";
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(v);
+}
+
+function signalClass(signal?: string): string {
+  if (!signal) return "text-slate-400";
+  const normalized = signal.toLowerCase();
+  if (normalized.startsWith("bull")) return "text-green-300";
+  if (normalized.startsWith("bear")) return "text-red-300";
+  return "text-slate-300";
 }
 
 export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
@@ -51,11 +150,39 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
   const [loading, setLoading] = useState(false);
   const [refreshingDeep, setRefreshingDeep] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("symbol");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [assetDeepData, setAssetDeepData] = useState<Record<string, AssetDeepAnalysis>>({});
+  const [assetDeepLoading, setAssetDeepLoading] = useState<Record<string, boolean>>({});
+
+  const fetchAssetDeep = useCallback(
+    async (symbol: string): Promise<void> => {
+      if (!symbol || assetDeepData[symbol] || assetDeepLoading[symbol]) return;
+      const token = localStorage.getItem("token");
+      if (!token) return;
+
+      setAssetDeepLoading((prev) => ({ ...prev, [symbol]: true }));
+      try {
+        const res = await fetch(`${API_BASE_URL}/market/assets/${symbol}/analysis`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data: AssetDeepAnalysis = await res.json();
+        setAssetDeepData((prev) => ({ ...prev, [symbol]: data }));
+      } catch {
+        // best effort enrichment
+      } finally {
+        setAssetDeepLoading((prev) => ({ ...prev, [symbol]: false }));
+      }
+    },
+    [assetDeepData, assetDeepLoading],
+  );
 
   const pollJobUntilDone = useCallback(async (jobId: string): Promise<AIReport | null> => {
     const token = localStorage.getItem("token");
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 30; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const statusRes = await fetch(`${API_BASE_URL}/ai/watchlist-analysis/jobs/${jobId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -74,6 +201,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
   const requestDeepRefresh = useCallback(async (): Promise<void> => {
     const token = localStorage.getItem("token");
     if (!token || symbols.length === 0) return;
+
     setRefreshingDeep(true);
     try {
       const createRes = await fetch(`${API_BASE_URL}/ai/watchlist-analysis/jobs`, {
@@ -84,13 +212,15 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
         },
         body: JSON.stringify({ symbols, refresh: true, reason: "user_refresh" }),
       });
+
       const createPayload = await createRes.json();
       const jobId = createPayload?.job_id;
       if (!jobId) return;
+
       const finalReport = await pollJobUntilDone(jobId);
       if (finalReport) {
         setReport(finalReport);
-        setExpandedAssets(new Set(finalReport.assets?.map(a => a.symbol) || []));
+        setSelectedSymbol(finalReport.assets?.[0]?.symbol || null);
       }
     } catch (e: any) {
       setError(e?.message || "Failed background refresh");
@@ -99,328 +229,551 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
     }
   }, [pollJobUntilDone, symbols]);
 
-  const fetchReport = useCallback(async (forceRefresh = false) => {
-    if (symbols.length === 0) return;
-    setLoading(true);
-    setError(null);
+  const fetchReport = useCallback(
+    async (forceRefresh = false) => {
+      if (symbols.length === 0) return;
+      setLoading(true);
+      setError(null);
 
-    try {
-      const symbolStr = symbols.join(",");
-      const token = localStorage.getItem("token");
-      const url = `${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`;
-      
-      const res = await fetch(url, {
-        headers: token ? { "Authorization": `Bearer ${token}` } : {}
-      });
-      const data: AIReport = await res.json();
-      
-      if (data.error && !data.assets?.length) {
-        setError(data.error);
-      } else {
-        setReport(data);
-        setExpandedAssets(new Set(data.assets?.map(a => a.symbol) || []));
-      }
-      if (forceRefresh || data?._served_last_good || data?.source_status === "cache_hit") {
-        await requestDeepRefresh();
-      }
-    } catch (e: any) {
-      setError(e?.message || "Failed to generate analysis");
-    } finally {
-      setLoading(false);
-    }
-  }, [requestDeepRefresh, symbols]);
+      try {
+        const symbolStr = symbols.join(",");
+        const token = localStorage.getItem("token");
+        const url = `${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`;
+        const res = await fetch(url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const data: AIReport = await res.json();
 
-  const toggleAsset = (symbol: string) => {
-    setExpandedAssets(prev => {
-      const next = new Set(prev);
-      if (next.has(symbol)) next.delete(symbol);
-      else next.add(symbol);
-      return next;
+        if (data.error && !data.assets?.length) {
+          setError(data.error);
+        } else {
+          setReport(data);
+          setSelectedSymbol(data.assets?.[0]?.symbol || null);
+        }
+
+        if (forceRefresh || data?._served_last_good || data?.source_status === "cache_hit") {
+          await requestDeepRefresh();
+        }
+      } catch (e: any) {
+        setError(e?.message || "Failed to generate analysis");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [requestDeepRefresh, symbols],
+  );
+
+  useEffect(() => {
+    if (!selectedSymbol) return;
+    fetchAssetDeep(selectedSymbol);
+  }, [fetchAssetDeep, selectedSymbol]);
+
+  const assets = report?.assets || [];
+
+  const displayedAssets = useMemo(() => {
+    const filtered = assets.filter((asset) => verdictFilter === "ALL" || asset.verdict === verdictFilter);
+    const ranked = [...filtered].sort((a, b) => {
+      const betaA = assetDeepData[a.symbol]?.fundamentals?.beta;
+      const betaB = assetDeepData[b.symbol]?.fundamentals?.beta;
+      const getSignal = (v?: string): number => {
+        const s = (v || "").toLowerCase();
+        if (s.startsWith("bull")) return 1;
+        if (s.startsWith("bear")) return -1;
+        return 0;
+      };
+      const scoreSignal = (x: AssetAnalysis, k: SortKey): number => {
+        if (k === "h1") return getSignal(x.timeframe_signals?.tactical_1h);
+        if (k === "d1") return getSignal(x.timeframe_signals?.trend_1d);
+        return getSignal(x.timeframe_signals?.strategic_1w);
+      };
+
+      let cmp = 0;
+      switch (sortKey) {
+        case "symbol":
+          cmp = a.symbol.localeCompare(b.symbol);
+          break;
+        case "verdict":
+          cmp = a.verdict.localeCompare(b.verdict);
+          break;
+        case "h1":
+        case "d1":
+        case "w1":
+          cmp = scoreSignal(a, sortKey) - scoreSignal(b, sortKey);
+          break;
+        case "rsi":
+          cmp = (a.key_metrics?.rsi_daily ?? -999) - (b.key_metrics?.rsi_daily ?? -999);
+          break;
+        case "macd":
+          cmp = (a.key_metrics?.macd_signal || "").localeCompare(b.key_metrics?.macd_signal || "");
+          break;
+        case "ema":
+          cmp = (a.key_metrics?.ema_signal || "").localeCompare(b.key_metrics?.ema_signal || "");
+          break;
+        case "pe":
+          cmp = (a.key_metrics?.pe_ratio ?? -999) - (b.key_metrics?.pe_ratio ?? -999);
+          break;
+        case "beta":
+          cmp = (betaA ?? -999) - (betaB ?? -999);
+          break;
+        case "catalyst":
+          cmp = (a.catalyst || "").localeCompare(b.catalyst || "");
+          break;
+        default:
+          cmp = 0;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
     });
+    return ranked;
+  }, [assetDeepData, assets, sortDir, sortKey, verdictFilter]);
+
+  const selectedAsset =
+    displayedAssets.find((a) => a.symbol === selectedSymbol) || displayedAssets[0] || null;
+  const selectedDeep = selectedAsset ? assetDeepData[selectedAsset.symbol] : undefined;
+
+  useEffect(() => {
+    if (!displayedAssets.length) {
+      setSelectedSymbol(null);
+      return;
+    }
+    if (!selectedSymbol || !displayedAssets.some((a) => a.symbol === selectedSymbol)) {
+      setSelectedSymbol(displayedAssets[0].symbol);
+    }
+  }, [displayedAssets, selectedSymbol]);
+
+  const coverageEstimate = useMemo(() => {
+    if (!displayedAssets.length) return 0;
+    let expected = 0;
+    let available = 0;
+
+    for (const asset of displayedAssets) {
+      expected += 8;
+      if (asset.timeframe_signals?.tactical_1h) available += 1;
+      if (asset.timeframe_signals?.trend_1d) available += 1;
+      if (asset.timeframe_signals?.strategic_1w) available += 1;
+      if (asset.key_metrics?.rsi_daily !== undefined && asset.key_metrics?.rsi_daily !== null) available += 1;
+      if (asset.key_metrics?.macd_signal) available += 1;
+      if (asset.key_metrics?.pe_ratio !== undefined && asset.key_metrics?.pe_ratio !== null) available += 1;
+      if (asset.analysis_bullets?.length) available += 1;
+      if (asset.action_note) available += 1;
+    }
+
+    return Math.round((available / Math.max(expected, 1)) * 100);
+  }, [displayedAssets]);
+
+  const toggleSort = (key: SortKey): void => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDir(key === "symbol" ? "asc" : "desc");
   };
 
-  const verdictConfig: Record<string, { color: string; icon: React.ReactNode; bg: string }> = {
-    BULLISH:  { color: "text-green-400", icon: <TrendingUp className="w-4 h-4" />, bg: "bg-green-500/10 border-green-500/20" },
-    BEARISH:  { color: "text-red-400",   icon: <TrendingDown className="w-4 h-4" />, bg: "bg-red-500/10 border-red-500/20" },
-    NEUTRAL:  { color: "text-steel",     icon: <Minus className="w-4 h-4" />, bg: "bg-white/5 border-white/10" },
-    CAUTION:  { color: "text-amber-400", icon: <AlertTriangle className="w-4 h-4" />, bg: "bg-amber-500/10 border-amber-500/20" },
+  const handleRowSelect = (symbol: string): void => {
+    setSelectedSymbol(symbol);
+    fetchAssetDeep(symbol);
+    onSelectAsset?.(symbol);
   };
 
-  const healthColors: Record<string, string> = {
-    STRONG: "text-green-400",
-    MODERATE: "text-amber-400",
-    WEAK: "text-red-400",
-    MIXED: "text-blue-400",
+  const handleMatrixKeyNav = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!displayedAssets.length || !selectedAsset) return;
+    const idx = displayedAssets.findIndex((a) => a.symbol === selectedAsset.symbol);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const next = displayedAssets[Math.min(displayedAssets.length - 1, idx + 1)];
+      if (next) handleRowSelect(next.symbol);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const prev = displayedAssets[Math.max(0, idx - 1)];
+      if (prev) handleRowSelect(prev.symbol);
+    }
   };
 
-  const riskColors: Record<string, string> = {
-    LOW: "text-green-400",
-    MODERATE: "text-amber-400",
-    HIGH: "text-red-400",
+  const sortGlyph = (key: SortKey): string => {
+    if (sortKey !== key) return "↕";
+    return sortDir === "asc" ? "↑" : "↓";
   };
 
-  // ─── Empty State: Show Generate Button ────────────────────────────────────
+  const sortButtonClass = (key: SortKey): string => {
+    const isActive = sortKey === key;
+    return isActive
+      ? "inline-flex items-center gap-1 text-slate-100 hover:text-white transition"
+      : "inline-flex items-center gap-1 text-slate-400 hover:text-white transition";
+  };
+
+  const resetView = (): void => {
+    setVerdictFilter("ALL");
+    setSortKey("symbol");
+    setSortDir("asc");
+  };
+
   if (!report && !loading) {
     return (
-      <div className="true-glass rounded-2xl p-6 sm:p-8 relative overflow-hidden group/ai">
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-500/30 to-transparent" />
-        
-        <div className="flex flex-col items-center text-center py-8 gap-5">
-          <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/20 flex items-center justify-center shadow-[0_0_30px_rgba(59,130,246,0.2)]">
-            <Sparkles className="w-7 h-7 text-blue-400" />
-          </div>
+      <div className="true-glass rounded-2xl p-6 relative overflow-hidden">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm uppercase tracking-[0.15em] text-slate-300 font-semibold">Analysis Report</h3>
+          <span className="text-[11px] text-slate-400">{symbols.length} assets</span>
+        </div>
 
-          <div>
-            <h3 className="text-lg font-bold text-marble mb-2">AI Watchlist Analysis</h3>
-            <p className="text-sm text-steel max-w-md">
-              Get a comprehensive technical, fundamental, and risk analysis of your entire watchlist powered by AI.
-              {symbols.length > 0 
-                ? ` Analyzing ${symbols.length} asset${symbols.length > 1 ? 's' : ''}.`
-                : " Add symbols to your watchlist to get started."
-              }
-            </p>
-          </div>
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">{error}</div>
+        )}
 
-          {error && (
-            <div className="w-full max-w-md p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
+        <div className="rounded-xl border border-white/10 bg-black/25 p-4">
+          <p className="text-sm text-slate-200 mb-4">
+            Build a concise institutional brief with multi-horizon technical and fundamental context.
+          </p>
           <button
             onClick={() => fetchReport(false)}
             disabled={symbols.length === 0}
-            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-blue-500/20 to-blue-600/20 border border-blue-500/30 text-blue-400 font-semibold text-sm hover:from-blue-500/30 hover:to-blue-600/30 hover:border-blue-400/50 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(59,130,246,0.15)]"
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:opacity-40"
           >
             <Sparkles className="w-4 h-4" />
-            Generate Analysis
+            Run Analysis
           </button>
         </div>
       </div>
     );
   }
 
-  // ─── Loading State ────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="true-glass rounded-2xl p-6 sm:p-8 relative overflow-hidden">
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-500/50 to-transparent animate-pulse" />
-        
-        <div className="flex flex-col items-center text-center py-12 gap-4">
-          <div className="relative">
-            <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/30 flex items-center justify-center animate-pulse">
-              <Sparkles className="w-7 h-7 text-blue-400 animate-spin" />
-            </div>
-            <div className="absolute -inset-4 bg-blue-500/10 rounded-full blur-xl animate-pulse" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-marble mb-1">Analyzing Your Watchlist...</h3>
-            <p className="text-sm text-steel">Gathering technicals, fundamentals, and market context</p>
-          </div>
-          <div className="flex gap-1.5 mt-2">
-            <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-            <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-            <div className="w-2 h-2 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "300ms" }} />
-          </div>
+      <div className="true-glass rounded-2xl p-6 relative overflow-hidden">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm uppercase tracking-[0.15em] text-slate-300 font-semibold">Analysis Report</h3>
+          <RefreshCw className="w-4 h-4 animate-spin text-blue-300" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-8 rounded bg-white/5 animate-pulse" />
+          <div className="h-8 rounded bg-white/5 animate-pulse" />
+          <div className="h-8 rounded bg-white/5 animate-pulse" />
+          <div className="h-8 rounded bg-white/5 animate-pulse" />
         </div>
       </div>
     );
   }
 
-  // ─── Report Rendered ──────────────────────────────────────────────────────
   if (!report) return null;
 
   return (
-    <div className="true-glass rounded-2xl relative overflow-hidden" id="ai-analysis-panel">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-500/30 to-transparent" />
-
-      {/* Header */}
-      <div className="p-5 sm:p-6 border-b border-white/5 bg-black/10">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20">
-              <Sparkles className="w-5 h-5 text-blue-400" />
-            </div>
-            <div>
-              <h3 className="font-bold text-marble text-lg">AI Watchlist Analysis</h3>
-              <p className="text-xs text-steel flex items-center gap-2 mt-0.5">
-                {report.from_cache && <span className="text-blue-400/60">Cached</span>}
-                {refreshingDeep && <span className="text-purple-300/80">Refreshing</span>}
-                {report.generated_at && <span>{new Date(report.generated_at).toLocaleString()}</span>}
-                {report._mock && <span className="text-amber-400">(Simulated)</span>}
-                {report._served_last_good && <span className="text-blue-300/70">(Last Known Good)</span>}
-              </p>
+    <div className="true-glass rounded-2xl overflow-hidden" id="ai-analysis-panel">
+      <div className="border-b border-white/10 bg-black/30 p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm uppercase tracking-[0.16em] text-slate-300 font-semibold">Analysis Report</h3>
+            <p className="mt-1 text-xs text-slate-400">Executive strip, signal matrix, focused drilldown</p>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {report.source_status && (
+                <span
+                  title="Current analysis response source"
+                  className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300"
+                >
+                  {report.source_status}
+                </span>
+              )}
+              {report.from_cache && (
+                <span
+                  title="Served from cached report"
+                  className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300"
+                >
+                  Cached
+                </span>
+              )}
+              {report._served_last_good && (
+                <span
+                  title="Fresh generation failed; showing last successful report"
+                  className="rounded border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200"
+                >
+                  Last Good
+                </span>
+              )}
+              {report._mock && (
+                <span
+                  title="Simulated analysis fallback was used"
+                  className="rounded border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-200"
+                >
+                  Simulated
+                </span>
+              )}
             </div>
           </div>
+          <button
+            onClick={() => fetchReport(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10 transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshingDeep ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+      </div>
 
-          <div className="flex items-center gap-3">
-            {/* Health Badge */}
-            <div className={`px-3 py-1 rounded-full border text-xs font-bold ${healthColors[report.watchlist_health] || "text-steel"} border-white/10 bg-white/5`}>
-              Health: {report.watchlist_health}
-            </div>
-            {/* Risk Badge */}
-            <div className={`px-3 py-1 rounded-full border text-xs font-bold flex items-center gap-1.5 ${riskColors[report.risk_level] || "text-steel"} border-white/10 bg-white/5`}>
-              <Shield className="w-3 h-3" />
-              Risk: {report.risk_level}
-            </div>
-            {/* Refresh */}
+      <div className="border-b border-white/10 bg-black/15 p-4 sm:p-5">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-2 text-[11px]">
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Health</p>
+            <p className={`font-semibold ${HEALTH_COLORS[report.watchlist_health] || "text-slate-200"}`}>{report.watchlist_health}</p>
+          </div>
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Risk</p>
+            <p className={`font-semibold ${RISK_COLORS[report.risk_level] || "text-slate-200"}`}>
+              <span className="inline-flex items-center gap-1"><Shield className="w-3 h-3" />{report.risk_level}</span>
+            </p>
+          </div>
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Coverage</p>
+            <p className="font-semibold text-slate-200">{coverageEstimate}%</p>
+          </div>
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Status</p>
+            <p className="font-semibold text-slate-200">{report.source_status || "unknown"}</p>
+          </div>
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Assets</p>
+            <p className="font-semibold text-slate-200">{displayedAssets.length}</p>
+          </div>
+          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
+            <p className="uppercase tracking-wider text-slate-400">Updated</p>
+            <p className="font-semibold text-slate-200">{report.generated_at ? new Date(report.generated_at).toLocaleTimeString() : "-"}</p>
+          </div>
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-slate-300">{report.market_summary}</p>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wider text-slate-400">Filter</span>
+          {(["ALL", "BULLISH", "BEARISH", "NEUTRAL", "CAUTION"] as VerdictFilter[]).map((vf) => (
             <button
-              onClick={() => fetchReport(true)}
-              className="p-2 rounded-lg bg-white/5 border border-white/10 text-steel hover:text-marble hover:bg-white/10 transition-all"
-              title="Regenerate analysis (Force Refresh)"
+              key={vf}
+              onClick={() => setVerdictFilter(vf)}
+              className={`rounded-md border px-2.5 py-1 text-[11px] transition ${
+                verdictFilter === vf
+                  ? "border-blue-400/40 bg-blue-500/15 text-blue-200"
+                  : "border-white/15 bg-white/[0.03] text-slate-300 hover:bg-white/[0.08]"
+              }`}
             >
-              <RefreshCw className={`w-4 h-4 ${refreshingDeep ? "animate-spin" : ""}`} />
+              {vf}
             </button>
-          </div>
+          ))}
+          <button
+            onClick={resetView}
+            className="ml-1 rounded-md border border-white/15 bg-white/[0.03] px-2.5 py-1 text-[11px] text-slate-300 transition hover:bg-white/[0.08]"
+            title="Reset filter and sorting"
+          >
+            Reset View
+          </button>
+          <span className="ml-1 text-[11px] text-slate-500">Use up/down keys to move rows</span>
         </div>
-      </div>
 
-      {/* Market Summary */}
-      <div className="px-5 sm:px-6 py-4 border-b border-white/5 bg-black/5 space-y-4">
-        <p className="text-sm text-marble/90 leading-relaxed font-medium">{report.market_summary}</p>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/10">
-            <h4 className="text-[10px] uppercase tracking-wider text-blue-400 font-bold mb-1 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3" /> Tactical Outlook (1-5 Days)
-            </h4>
-            <p className="text-xs text-steel leading-relaxed">{report.tactical_outlook}</p>
-          </div>
-          <div className="p-3 rounded-xl bg-purple-500/5 border border-purple-500/10">
-            <h4 className="text-[10px] uppercase tracking-wider text-purple-400 font-bold mb-1 flex items-center gap-1.5">
-              <Shield className="w-3 h-3" /> Strategic Horizon (Months)
-            </h4>
-            <p className="text-xs text-steel leading-relaxed">{report.strategic_horizon}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Per-Asset Analysis */}
-      <div className="divide-y divide-white/5">
-        {report.assets?.map((asset) => {
-          const vc = verdictConfig[asset.verdict] || verdictConfig.NEUTRAL;
-          const isExpanded = expandedAssets.has(asset.symbol);
-
-          return (
-            <div key={asset.symbol} className="group/asset">
-              {/* Collapsed Header (Full Row Clickable) */}
-              <div 
-                onClick={() => toggleAsset(asset.symbol)}
-                className="w-full flex items-center justify-between px-5 sm:px-6 py-4 hover:bg-white/5 transition-colors text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-4 flex-wrap">
-                  <span
-                    className="font-mono font-bold text-marble hover:text-blue-400 transition-colors text-base z-10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectAsset?.(asset.symbol);
+        <div
+          className="overflow-x-auto rounded-lg border border-white/10"
+          tabIndex={0}
+          onKeyDown={handleMatrixKeyNav}
+        >
+          <table className="w-full min-w-[980px] text-xs">
+            <thead className="text-slate-300">
+              <tr className="border-b border-white/10">
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("symbol")} onClick={() => toggleSort("symbol")} title="Sort by symbol">
+                    Symbol <span className="text-[10px]">{sortGlyph("symbol")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("verdict")} onClick={() => toggleSort("verdict")} title="Sort by verdict">
+                    Verdict <span className="text-[10px]">{sortGlyph("verdict")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("h1")} onClick={() => toggleSort("h1")} title="Sort by 1h signal">
+                    1h <span className="text-[10px]">{sortGlyph("h1")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("d1")} onClick={() => toggleSort("d1")} title="Sort by 1d signal">
+                    1d <span className="text-[10px]">{sortGlyph("d1")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("w1")} onClick={() => toggleSort("w1")} title="Sort by 1w signal">
+                    1w <span className="text-[10px]">{sortGlyph("w1")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("rsi")} onClick={() => toggleSort("rsi")} title="Sort by RSI">
+                    RSI <span className="text-[10px]">{sortGlyph("rsi")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("macd")} onClick={() => toggleSort("macd")} title="Sort by MACD signal">
+                    MACD <span className="text-[10px]">{sortGlyph("macd")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("ema")} onClick={() => toggleSort("ema")} title="Sort by EMA signal">
+                    EMA <span className="text-[10px]">{sortGlyph("ema")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("pe")} onClick={() => toggleSort("pe")} title="Sort by P/E">
+                    P/E <span className="text-[10px]">{sortGlyph("pe")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("beta")} onClick={() => toggleSort("beta")} title="Sort by beta">
+                    Beta <span className="text-[10px]">{sortGlyph("beta")}</span>
+                  </button>
+                </th>
+                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
+                  <button className={sortButtonClass("catalyst")} onClick={() => toggleSort("catalyst")} title="Sort by catalyst">
+                    Catalyst <span className="text-[10px]">{sortGlyph("catalyst")}</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayedAssets.map((asset) => {
+                const style = VERDICT_STYLE[asset.verdict] || VERDICT_STYLE.NEUTRAL;
+                const deep = assetDeepData[asset.symbol];
+                return (
+                  <tr
+                    key={asset.symbol}
+                    onClick={() => handleRowSelect(asset.symbol)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleRowSelect(asset.symbol);
+                      }
                     }}
+                    tabIndex={0}
+                    className={`cursor-pointer border-b border-white/5 transition ${
+                      selectedAsset?.symbol === asset.symbol ? "bg-white/[0.07]" : "hover:bg-white/[0.035]"
+                    }`}
                   >
-                    {asset.symbol}
-                  </span>
-                  
-                  {/* Verdict Badge */}
-                  <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold flex items-center gap-1 ${vc.bg} ${vc.color}`}>
-                    {vc.icon}
-                    {asset.verdict}
-                  </span>
-
-                  {/* Multi-Horizon Pulse */}
-                  <div className="flex items-center gap-2">
-                    {["1h", "1d", "1w"].map((tf) => {
-                      const sig = tf === "1h" ? asset.timeframe_signals?.tactical_1h :
-                                  tf === "1d" ? asset.timeframe_signals?.trend_1d :
-                                  asset.timeframe_signals?.strategic_1w;
-                      
-                      const color = sig === "Bullish" ? "text-green-400 bg-green-500/10 border-green-500/20" :
-                                   sig === "Bearish" ? "text-red-400 bg-red-500/10 border-red-500/20" :
-                                   "text-steel bg-white/5 border-white/10";
-
-                      return (
-                        <div key={tf} className={`px-2 py-0.5 rounded border text-[9px] font-bold ${color}`} title={`${tf} Horizon Signal`}>
-                          {tf.toUpperCase()}: {sig?.slice(0, 4)}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Key Metric Badges */}
-                  <div className="flex items-center gap-2 ml-2 border-l border-white/10 pl-4">
-                    {asset.key_metrics?.rsi_daily !== undefined && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="Daily RSI">
-                        <span className="text-steel">RSI</span>
-                        <span className={asset.key_metrics.rsi_daily > 70 ? "text-red-400" : asset.key_metrics.rsi_daily < 30 ? "text-green-400" : "text-blue-300"}>
-                          {asset.key_metrics.rsi_daily}
-                        </span>
+                    <td className="sticky left-0 z-[1] bg-black/70 px-3 py-2 font-mono font-semibold text-slate-100">
+                      <div className="relative pl-2">
+                        {selectedAsset?.symbol === asset.symbol && (
+                          <span className="absolute left-0 top-0 bottom-0 w-0.5 rounded bg-blue-300" />
+                        )}
+                        {asset.symbol}
                       </div>
-                    )}
-                    {asset.key_metrics?.ema_signal && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[10px]" title="EMA (9/21) Momentum">
-                        <span className="text-steel">EMA</span>
-                        <span className={asset.key_metrics.ema_signal === 'Bullish' ? "text-green-400" : asset.key_metrics.ema_signal === 'Bearish' ? "text-red-400" : "text-steel"}>
-                          {asset.key_metrics.ema_signal}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 ${style.bg} ${style.text}`}>
+                        {style.icon}
+                        {asset.verdict}
+                      </span>
+                    </td>
+                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.tactical_1h)}`}>{asset.timeframe_signals?.tactical_1h || "-"}</td>
+                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.trend_1d)}`}>{asset.timeframe_signals?.trend_1d || "-"}</td>
+                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.strategic_1w)}`}>{asset.timeframe_signals?.strategic_1w || "-"}</td>
+                    <td className="px-3 py-2 text-slate-200">{fmt(asset.key_metrics?.rsi_daily, 1)}</td>
+                    <td className="px-3 py-2 text-slate-200">{asset.key_metrics?.macd_signal || "-"}</td>
+                    <td className="px-3 py-2 text-slate-200">{asset.key_metrics?.ema_signal || "-"}</td>
+                    <td className="px-3 py-2 text-slate-200">{fmt(asset.key_metrics?.pe_ratio, 2)}</td>
+                    <td className="px-3 py-2 text-slate-200">{fmt(deep?.fundamentals?.beta, 2)}</td>
+                    <td className="max-w-[220px] truncate px-3 py-2 text-slate-400" title={asset.catalyst}>{asset.catalyst || "-"}</td>
+                  </tr>
+                );
+              })}
+              {displayedAssets.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="px-3 py-6 text-center text-slate-400">
+                    No assets match the current filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
-                <div className="p-1.5 rounded-lg text-steel">
-                  {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                </div>
+        {selectedAsset && (
+          <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-blue-300 font-semibold">
+                <Activity className="w-3.5 h-3.5" />
+                Technical Stack
               </div>
-
-              {/* Expanded Detail */}
-              {isExpanded && (
-                <div className="px-5 sm:px-6 pb-6 space-y-4 animate-in slide-in-from-top-2 duration-200">
-                  {/* Horizon-Depth Analysis */}
-                  <div className="bg-black/20 rounded-2xl p-5 border border-white/5 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-4 opacity-10">
-                      <Sparkles className="w-12 h-12 text-blue-400" />
-                    </div>
-                    <h4 className="text-[10px] uppercase tracking-[0.2em] text-blue-400 mb-4 font-bold">Horizon-Depth Analysis</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-                      {Array.isArray(asset.analysis_bullets) ? asset.analysis_bullets.map((bullet, idx) => (
-                        <div key={idx} className="flex gap-2 text-sm text-marble/90 leading-relaxed">
-                          <span className="text-blue-500/50 mt-1.5 h-1.5 w-1.5 rounded-full bg-current shrink-0" />
-                          {bullet}
-                        </div>
-                      )) : <p className="text-sm text-steel">Multi-horizon data processing...</p>}
-                    </div>
-                  </div>
-
-                  {/* Footer Row: Catalyst & Action */}
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    {asset.catalyst && (
-                      <div className="flex-1 bg-amber-500/5 rounded-xl px-4 py-3 border border-amber-500/10 flex items-start gap-3">
-                        <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                        <p className="text-xs text-amber-200/80 leading-relaxed">
-                          <span className="font-bold text-amber-400 mr-1">WATCH CATALYST:</span>
-                          {asset.catalyst}
-                        </p>
-                      </div>
-                    )}
-                    {asset.action_note && (
-                      <div className="flex-1 bg-blue-500/5 rounded-xl px-4 py-3 border border-blue-500/10 flex items-start gap-3">
-                        <Sparkles className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
-                        <p className="text-xs text-blue-200/80 leading-relaxed italic">
-                          {asset.action_note}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+              {assetDeepLoading[selectedAsset.symbol] ? (
+                <p className="text-xs text-slate-400">Loading technical detail...</p>
+              ) : (
+                <div className="space-y-1 text-xs text-slate-300">
+                  <p>Trend: <span className="text-slate-100">{selectedDeep?.technicals?.trend_signal || selectedAsset.timeframe_signals?.trend_1d || "-"}</span></p>
+                  <p>RSI: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.rsi, 1)}</span></p>
+                  <p>MACD / Signal: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.macd, 2)} / {fmt(selectedDeep?.technicals?.macd_signal, 2)}</span></p>
+                  <p>EMA 9 / 21: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.ema_9, 2)} / {fmt(selectedDeep?.technicals?.ema_21, 2)}</span></p>
+                  <p>SMA 20 / 50 / 200: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.sma_20, 2)} / {fmt(selectedDeep?.technicals?.sma_50, 2)} / {fmt(selectedDeep?.technicals?.sma_200, 2)}</span></p>
                 </div>
               )}
             </div>
-          );
-        })}
+
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-purple-300 font-semibold">
+                <Gauge className="w-3.5 h-3.5" />
+                Fundamental Stack
+              </div>
+              {assetDeepLoading[selectedAsset.symbol] ? (
+                <p className="text-xs text-slate-400">Loading fundamentals...</p>
+              ) : (
+                <div className="space-y-1 text-xs text-slate-300">
+                  <p>P/E: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.pe_ratio ?? selectedAsset.key_metrics?.pe_ratio, 2)}</span></p>
+                  <p>EPS: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.eps, 2)}</span></p>
+                  <p>Beta: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.beta, 2)}</span></p>
+                  <p>Dividend Yield: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.dividend_yield, 2)}%</span></p>
+                  <p>Market Cap: <span className="text-slate-100">{fmtCompact(selectedDeep?.fundamentals?.market_cap)}</span></p>
+                  <p>52W H/L: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.high_52week, 2)} / {fmt(selectedDeep?.fundamentals?.low_52week, 2)}</span></p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-amber-300 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Event + AI Notes
+              </div>
+              {assetDeepLoading[selectedAsset.symbol] ? (
+                <p className="text-xs text-slate-400">Loading event context...</p>
+              ) : (
+                <div className="space-y-2 text-xs text-slate-300">
+                  <p>Sentiment: <span className="text-slate-100">{fmt(selectedDeep?.sentiment?.sentiment_score, 2)}</span></p>
+                  <div className="flex flex-wrap gap-1">
+                    {(selectedDeep?.sentiment?.trending_topics || []).slice(0, 4).map((topic, i) => (
+                      <span key={`${selectedAsset.symbol}-topic-${i}`} className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">
+                        {topic}
+                      </span>
+                    ))}
+                    {(selectedDeep?.sentiment?.trending_topics || []).length === 0 && (
+                      <span className="text-slate-400">No event tags available</span>
+                    )}
+                  </div>
+                  <p className="text-slate-200">{selectedAsset.action_note || "-"}</p>
+                  {!!selectedAsset.catalyst && <p className="text-amber-200/90">Catalyst: {selectedAsset.catalyst}</p>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {selectedAsset && (
+          <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
+            <p className="mb-2 text-[11px] uppercase tracking-wider text-slate-400">AI Bullet Synthesis</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {(selectedAsset.analysis_bullets || []).map((bullet, idx) => (
+                <p key={`${selectedAsset.symbol}-bullet-${idx}`} className="text-xs text-slate-300 leading-relaxed">
+                  - {bullet}
+                </p>
+              ))}
+              {(selectedAsset.analysis_bullets || []).length === 0 && (
+                <p className="text-xs text-slate-400">No per-asset bullets returned.</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Overall Insight Footer */}
       {report.overall_insight && (
-        <div className="px-5 sm:px-6 py-4 border-t border-white/5 bg-gradient-to-r from-blue-500/5 to-transparent">
-          <p className="text-sm text-marble/80 leading-relaxed">
-            <span className="font-bold text-blue-400">Summary:</span> {report.overall_insight}
+        <div className="border-t border-white/10 bg-gradient-to-r from-blue-500/10 to-transparent px-4 sm:px-5 py-3">
+          <p className="text-sm text-slate-200 leading-relaxed">
+            <span className="font-semibold text-blue-300">Portfolio Insight:</span> {report.overall_insight}
           </p>
         </div>
       )}
