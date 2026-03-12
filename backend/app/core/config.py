@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     AI_INCLUDE_NEWS_SENTIMENT: bool = False
 
     # Timeout budgets for AI report generation pipeline.
+    # We bias more time toward the model call now that news sentiment is disabled
+    # by default (assembly is cheaper, so we can shrink its budget).
     AI_TOTAL_BUDGET_SECONDS: float = 24.0
-    AI_ASSEMBLY_BUDGET_SECONDS: float = 10.0
-    AI_MODEL_BUDGET_SECONDS: float = 12.0
+    AI_ASSEMBLY_BUDGET_SECONDS: float = 6.0
+    AI_MODEL_BUDGET_SECONDS: float = 16.0
     AI_PARSE_BUDGET_SECONDS: float = 1.5
 
     # Config ensures Pydantic looks for a .env file and errors out if critical vars (like DATABASE_URL) are missing

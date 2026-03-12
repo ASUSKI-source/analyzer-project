@@ -430,7 +430,9 @@ Provide your analysis following the output format specified in your system instr
             },
             json={
                 "model": _MODEL,
-                "max_tokens": 2048,
+                # Slightly lower max_tokens to reduce latency / timeout risk while
+                # still leaving plenty of headroom for rich analysis.
+                "max_tokens": 1200,
                 "system": _MASTER_PROMPT,
                 "messages": [
                     {"role": "user", "content": user_message}
@@ -476,6 +478,17 @@ Provide your analysis following the output format specified in your system instr
             "raw_text": truncated,
         }
 
+    except httpx.ReadTimeout as e:
+        # Treat read timeouts as a hard pipeline timeout so the outer route-level
+        # timeout handler can return a consistent timeout message instead of a
+        # simulated fallback report.
+        logger.warning(
+            "%s Anthropic ReadTimeout after %.2fs: %s",
+            log_prefix,
+            timeout_seconds,
+            _sanitize_error_message(str(e)),
+        )
+        raise asyncio.TimeoutError("Anthropic ReadTimeout") from e
     except httpx.HTTPStatusError as e:
         endpoint = _sanitize_url_for_logs(str(e.request.url)) if e.request else _ANTHROPIC_API_URL
         body_preview = _sanitize_error_message(e.response.text[:200] if e.response and e.response.text else "")
