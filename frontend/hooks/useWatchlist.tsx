@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE_URL } from "@/services/api_client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -24,6 +24,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const [symbols, setSymbols] = useState<WatchlistSymbol[]>([]);
   const [loading, setLoading] = useState(true);
+  const lastPrewarmKeyRef = useRef<string | null>(null);
 
   const getToken = () => typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
@@ -54,6 +55,27 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
       }
     }
   };
+
+  const maybePrewarmAnalysis = useCallback(async (items: WatchlistSymbol[]) => {
+    const token = getToken();
+    if (!user || !token || items.length === 0) return;
+    const normalized = items.map(s => s.symbol).filter(Boolean).map(s => s.toUpperCase()).sort();
+    const prewarmKey = `${user.id}:${normalized.join(",")}`;
+    if (!prewarmKey || lastPrewarmKeyRef.current === prewarmKey) return;
+    lastPrewarmKeyRef.current = prewarmKey;
+    try {
+      await fetch(`${API_BASE_URL}/ai/watchlist-analysis/prewarm`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ symbols: normalized }),
+      });
+    } catch (e) {
+      console.warn("Watchlist analysis prewarm failed", e);
+    }
+  }, [user]);
 
   const fetchWatchlist = useCallback(async () => {
     if (authLoading) return;
@@ -88,12 +110,15 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           });
           if (res2.ok) {
              const data2 = await res2.json();
-             setSymbols(data2.symbols || []);
-             saveLocalWatchlist(data2.symbols || []);
+             const nextSymbols = data2.symbols || [];
+             setSymbols(nextSymbols);
+             saveLocalWatchlist(nextSymbols);
+             await maybePrewarmAnalysis(nextSymbols);
           }
         } else {
           setSymbols(apiSymbols);
           saveLocalWatchlist(apiSymbols);
+          await maybePrewarmAnalysis(apiSymbols);
         }
       }
     } catch (e) {
@@ -102,7 +127,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, maybePrewarmAnalysis]);
 
   useEffect(() => {
     fetchWatchlist();
@@ -110,7 +135,11 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     // Fallback sync listener for manual triggers
     const handleUpdate = () => fetchWatchlist();
     window.addEventListener("watchlist-updated", handleUpdate);
-    return () => window.removeEventListener("watchlist-updated", handleUpdate);
+    window.addEventListener("auth-hydrated", handleUpdate);
+    return () => {
+      window.removeEventListener("watchlist-updated", handleUpdate);
+      window.removeEventListener("auth-hydrated", handleUpdate);
+    };
   }, [fetchWatchlist]);
 
   const addSymbol = async (symbol: string): Promise<boolean> => {

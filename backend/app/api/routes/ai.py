@@ -8,13 +8,15 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.services.ai_analyzer import generate_watchlist_report
+from app.services.ai_analyzer import generate_watchlist_report, get_last_good_report
+from app.services.ai_jobs import enqueue_analysis_job, get_analysis_job, maybe_enqueue_login_prewarm
 from app.services.watchlist import get_user_watchlist
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,32 @@ router = APIRouter()
 # We MUST respond before that, or the proxy drops the connection
 # and the browser interprets the missing headers as a CORS failure.
 _ENDPOINT_TIMEOUT = 25.0  # seconds
+
+
+class AnalysisJobCreateRequest(BaseModel):
+    symbols: Optional[list[str]] = None
+    refresh: bool = False
+    reason: str = Field(default="manual", max_length=40)
+
+
+class AnalysisPrewarmRequest(BaseModel):
+    symbols: Optional[list[str]] = None
+
+
+async def _resolve_symbols(
+    current_user: User,
+    db: AsyncSession,
+    symbols: Optional[str] = None,
+    symbol_list: Optional[list[str]] = None,
+) -> list[str]:
+    if symbol_list is not None:
+        resolved = [s.strip().upper() for s in symbol_list if isinstance(s, str) and s.strip()]
+    elif symbols:
+        resolved = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        watchlist_items = await get_user_watchlist(db, current_user)
+        resolved = [item["symbol"] for item in watchlist_items]
+    return resolved[:20]
 
 
 @router.get("/watchlist-analysis")
@@ -41,22 +69,13 @@ async def get_watchlist_analysis(
     - Override: pass ?symbols=AAPL,BTC,SPY to analyze specific symbols.
     - Reports are cached for 8 hours (open/close scanning).
     """
-    # Determine which symbols to analyze
-    if symbols:
-        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    else:
-        # Pull from user's saved watchlist via the existing service
-        watchlist_items = await get_user_watchlist(db, current_user)
-        symbol_list = [item["symbol"] for item in watchlist_items]
+    symbol_list = await _resolve_symbols(current_user=current_user, db=db, symbols=symbols)
 
     if not symbol_list:
         return {
             "error": "No symbols to analyze. Add items to your watchlist first.",
             "assets": []
         }
-
-    # Cap at 20 symbols to prevent abuse
-    symbol_list = symbol_list[:20]
 
     user_id = str(current_user.id)
 
@@ -83,6 +102,13 @@ async def get_watchlist_analysis(
         logger.error(
             f"{log_prefix} timed out after {_ENDPOINT_TIMEOUT}s for symbols={symbol_list}"
         )
+        last_good = await get_last_good_report(user_id=user_id, symbols=symbol_list)
+        if isinstance(last_good, dict):
+            last_good["from_cache"] = True
+            last_good["source_status"] = "last_good_fallback"
+            last_good["_served_last_good"] = True
+            last_good["_fallback_reason"] = "route_timeout"
+            return last_good
         timeout_response = {
             "market_summary": "Analysis timed out. This often happens if the data provider (Finnhub) is under heavy load or rate-limiting. We are currently optimizing data assembly to be more resilient.",
             "watchlist_health": "MIXED",
@@ -102,6 +128,13 @@ async def get_watchlist_analysis(
         return timeout_response
     except Exception as e:
         logger.error(f"AI report generation crashed: {e}", exc_info=True)
+        last_good = await get_last_good_report(user_id=user_id, symbols=symbol_list)
+        if isinstance(last_good, dict):
+            last_good["from_cache"] = True
+            last_good["source_status"] = "last_good_fallback"
+            last_good["_served_last_good"] = True
+            last_good["_fallback_reason"] = "route_error"
+            return last_good
         return {
             "error": f"Analysis failed: {str(e)[:200]}",
             "assets": [],
@@ -115,3 +148,59 @@ async def get_watchlist_analysis(
         report["_debug_timing"]["route_seconds"] = round(route_elapsed, 3)
         report["_debug_timing"]["request_id"] = request_id
     return report
+
+
+@router.post("/watchlist-analysis/jobs")
+async def create_watchlist_analysis_job(
+    payload: AnalysisJobCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    symbol_list = await _resolve_symbols(
+        current_user=current_user,
+        db=db,
+        symbol_list=payload.symbols,
+    )
+    if not symbol_list:
+        return {"error": "No symbols to analyze", "status": "rejected"}
+    user_id = str(current_user.id)
+    job = await enqueue_analysis_job(
+        user_id=user_id,
+        symbols=symbol_list,
+        refresh=bool(payload.refresh),
+        reason=payload.reason or "manual",
+    )
+    return job
+
+
+@router.get("/watchlist-analysis/jobs/{job_id}")
+async def get_watchlist_analysis_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    job = await get_analysis_job(job_id=job_id, user_id=str(current_user.id))
+    if job is None:
+        return {"status": "not_found", "job_id": job_id}
+    return job
+
+
+@router.post("/watchlist-analysis/prewarm")
+async def prewarm_watchlist_analysis(
+    payload: AnalysisPrewarmRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    symbol_list = await _resolve_symbols(
+        current_user=current_user,
+        db=db,
+        symbol_list=payload.symbols,
+    )
+    if not symbol_list:
+        return {"status": "noop", "reason": "no_symbols"}
+    job = await maybe_enqueue_login_prewarm(
+        user_id=str(current_user.id),
+        symbols=symbol_list,
+    )
+    if job is None:
+        return {"status": "skipped", "reason": "feature_disabled_or_cooldown"}
+    return {"status": "queued", "job_id": job.get("job_id")}

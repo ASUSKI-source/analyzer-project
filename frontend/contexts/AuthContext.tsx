@@ -56,6 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("auth-hydrated"));
+        }
       } else {
         localStorage.removeItem("token");
       }

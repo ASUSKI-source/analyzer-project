@@ -33,7 +33,10 @@ interface AIReport {
   overall_insight: string;
   generated_at?: string;
   from_cache?: boolean;
+  source_status?: string;
   _mock?: boolean;
+  _served_last_good?: boolean;
+  _fallback_reason?: string;
   cooldown_remaining?: number;
   error?: string;
 }
@@ -46,8 +49,55 @@ interface Props {
 export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
   const [report, setReport] = useState<AIReport | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshingDeep, setRefreshingDeep] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
+
+  const pollJobUntilDone = useCallback(async (jobId: string): Promise<AIReport | null> => {
+    const token = localStorage.getItem("token");
+    for (let i = 0; i < 30; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const statusRes = await fetch(`${API_BASE_URL}/ai/watchlist-analysis/jobs/${jobId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const statusPayload = await statusRes.json();
+      if (statusPayload?.status === "succeeded" && statusPayload?.result) {
+        return statusPayload.result as AIReport;
+      }
+      if (statusPayload?.status === "failed") {
+        throw new Error(statusPayload?.error || "Background analysis failed");
+      }
+    }
+    throw new Error("Background analysis timed out");
+  }, []);
+
+  const requestDeepRefresh = useCallback(async (): Promise<void> => {
+    const token = localStorage.getItem("token");
+    if (!token || symbols.length === 0) return;
+    setRefreshingDeep(true);
+    try {
+      const createRes = await fetch(`${API_BASE_URL}/ai/watchlist-analysis/jobs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ symbols, refresh: true, reason: "user_refresh" }),
+      });
+      const createPayload = await createRes.json();
+      const jobId = createPayload?.job_id;
+      if (!jobId) return;
+      const finalReport = await pollJobUntilDone(jobId);
+      if (finalReport) {
+        setReport(finalReport);
+        setExpandedAssets(new Set(finalReport.assets?.map(a => a.symbol) || []));
+      }
+    } catch (e: any) {
+      setError(e?.message || "Failed background refresh");
+    } finally {
+      setRefreshingDeep(false);
+    }
+  }, [pollJobUntilDone, symbols]);
 
   const fetchReport = useCallback(async (forceRefresh = false) => {
     if (symbols.length === 0) return;
@@ -57,7 +107,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
     try {
       const symbolStr = symbols.join(",");
       const token = localStorage.getItem("token");
-      const url = `${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}${forceRefresh ? "&refresh=true" : ""}`;
+      const url = `${API_BASE_URL}/ai/watchlist-analysis?symbols=${symbolStr}`;
       
       const res = await fetch(url, {
         headers: token ? { "Authorization": `Bearer ${token}` } : {}
@@ -68,15 +118,17 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
         setError(data.error);
       } else {
         setReport(data);
-        // Auto-expand all assets on first load
         setExpandedAssets(new Set(data.assets?.map(a => a.symbol) || []));
+      }
+      if (forceRefresh || data?._served_last_good || data?.source_status === "cache_hit") {
+        await requestDeepRefresh();
       }
     } catch (e: any) {
       setError(e?.message || "Failed to generate analysis");
     } finally {
       setLoading(false);
     }
-  }, [symbols]);
+  }, [requestDeepRefresh, symbols]);
 
   const toggleAsset = (symbol: string) => {
     setExpandedAssets(prev => {
@@ -193,8 +245,10 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
               <h3 className="font-bold text-marble text-lg">AI Watchlist Analysis</h3>
               <p className="text-xs text-steel flex items-center gap-2 mt-0.5">
                 {report.from_cache && <span className="text-blue-400/60">Cached</span>}
+                {refreshingDeep && <span className="text-purple-300/80">Refreshing</span>}
                 {report.generated_at && <span>{new Date(report.generated_at).toLocaleString()}</span>}
                 {report._mock && <span className="text-amber-400">(Simulated)</span>}
+                {report._served_last_good && <span className="text-blue-300/70">(Last Known Good)</span>}
               </p>
             </div>
           </div>
@@ -215,7 +269,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
               className="p-2 rounded-lg bg-white/5 border border-white/10 text-steel hover:text-marble hover:bg-white/10 transition-all"
               title="Regenerate analysis (Force Refresh)"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${refreshingDeep ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>

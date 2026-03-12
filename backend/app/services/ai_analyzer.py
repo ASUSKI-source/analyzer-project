@@ -21,7 +21,7 @@ import httpx
 
 from app.core.cache import cache_client
 from app.core.config import settings
-from app.utils.http import get_http_client
+from app.utils.http import get_llm_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,15 @@ _FUNDAMENTALS_CACHE_TTL = 43_200 # 12 hours — Finnhub fundamentals
 # ─── Anthropic Config ────────────────────────────────────────────────────────
 _ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 _MODEL = "claude-haiku-4-5"  # Correct model ID provided by user
+_REPORT_REQUIRED_KEYS = {
+    "market_summary",
+    "watchlist_health",
+    "risk_level",
+    "tactical_outlook",
+    "strategic_horizon",
+    "assets",
+    "overall_insight",
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -56,6 +65,9 @@ async def generate_watchlist_report(
     pipeline_start = time.monotonic()
     cache_gate_seconds = 0.0
     cache_key = _report_cache_key(user_id, symbols)
+    last_good_key = _last_good_report_key(user_id, symbols)
+    attempt_meta_key = _last_attempt_meta_key(user_id, symbols)
+    last_good_cached = await cache_client.get(last_good_key)
     if not refresh:
         cache_gate_start = time.monotonic()
         # ── 2. Security: Global 5-minute AI Generation Cooldown ─────────────────
@@ -81,6 +93,7 @@ async def generate_watchlist_report(
             else:
                 logger.info(f"AI report cache HIT for user {user_id}")
                 cached["from_cache"] = True
+                cached["source_status"] = "cache_hit"
                 return cached
         cache_gate_seconds = time.monotonic() - cache_gate_start
 
@@ -116,48 +129,85 @@ async def generate_watchlist_report(
         raise asyncio.TimeoutError("No budget left before assembly stage")
     effective_assembly_budget = min(assembly_budget, remaining_before_assembly)
 
-    start_assembly = time.monotonic()
-    data_context, assembly_metrics = await _assemble_data_context(
-        symbols,
-        db,
-        budget_seconds=effective_assembly_budget,
-        log_prefix=log_prefix,
-    )
-    assembly_duration = time.monotonic() - start_assembly
-    logger.info(
-        f"{log_prefix} data assembly completed in {assembly_duration:.2f}s "
-        f"for symbols={symbols}."
-    )
+    try:
+        start_assembly = time.monotonic()
+        data_context, assembly_metrics = await _assemble_data_context(
+            symbols,
+            db,
+            budget_seconds=effective_assembly_budget,
+            log_prefix=log_prefix,
+        )
+        assembly_duration = time.monotonic() - start_assembly
+        logger.info(
+            f"{log_prefix} data assembly completed in {assembly_duration:.2f}s "
+            f"for symbols={symbols}."
+        )
 
-    # ── 3. Call Anthropic ────────────────────────────────────────────────────
-    # PRUNE CONTEXT: Ensure we don't send a massive payload that causes timeouts
-    pruned_context = _prune_context(data_context)
+        # ── 3. Call Anthropic ────────────────────────────────────────────────
+        # PRUNE CONTEXT: Ensure we don't send a massive payload that causes timeouts
+        pruned_context = _prune_context(data_context)
 
-    remaining_before_model = _seconds_remaining(deadline)
-    if remaining_before_model <= 0:
-        raise asyncio.TimeoutError("No budget left before model stage")
-    effective_model_budget = min(model_budget, remaining_before_model)
+        remaining_before_model = _seconds_remaining(deadline)
+        if remaining_before_model <= 0:
+            raise asyncio.TimeoutError("No budget left before model stage")
+        effective_model_budget = min(model_budget, remaining_before_model)
 
-    start_ai = time.monotonic()
-    report = await _call_anthropic(
-        symbols,
-        pruned_context,
-        timeout_seconds=effective_model_budget,
-        parse_budget_seconds=parse_budget,
-        log_prefix=log_prefix,
-    )
-    ai_duration = time.monotonic() - start_ai
-    total_duration = time.monotonic() - pipeline_start
+        start_ai = time.monotonic()
+        report = await _call_anthropic(
+            symbols,
+            pruned_context,
+            timeout_seconds=effective_model_budget,
+            parse_budget_seconds=parse_budget,
+            log_prefix=log_prefix,
+        )
+        ai_duration = time.monotonic() - start_ai
+        total_duration = time.monotonic() - pipeline_start
 
-    logger.info(
-        f"{log_prefix} Anthropic call completed in {ai_duration:.2f}s; "
-        f"end-to-end report generation took {total_duration:.2f}s."
-    )
+        logger.info(
+            f"{log_prefix} Anthropic call completed in {ai_duration:.2f}s; "
+            f"end-to-end report generation took {total_duration:.2f}s."
+        )
+    except asyncio.TimeoutError as timeout_error:
+        await cache_client.set(
+            attempt_meta_key,
+            {
+                "status": "timeout",
+                "request_id": request_id,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "detail": str(timeout_error),
+            },
+            expire_seconds=max(60, int(getattr(settings, "AI_LAST_ATTEMPT_TTL_SECONDS", 21_600))),
+        )
+        if isinstance(last_good_cached, dict):
+            logger.warning("%s serving last-good report due to timeout", log_prefix)
+            return _decorate_last_good_report(last_good_cached, "fresh_analysis_timed_out")
+        raise
+    except Exception as e:
+        await cache_client.set(
+            attempt_meta_key,
+            {
+                "status": "error",
+                "request_id": request_id,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "detail": _sanitize_error_message(str(e)),
+            },
+            expire_seconds=max(60, int(getattr(settings, "AI_LAST_ATTEMPT_TTL_SECONDS", 21_600))),
+        )
+        if isinstance(last_good_cached, dict):
+            logger.warning("%s serving last-good report due to pipeline error", log_prefix)
+            return _decorate_last_good_report(last_good_cached, "fresh_analysis_error")
+        raise
 
     # ── 4. Cache & Return ────────────────────────────────────────────────────
+    report = _enforce_report_schema(
+        report=report,
+        symbols=symbols,
+        strict=bool(getattr(settings, "AI_STRICT_JSON_ENFORCEMENT", True)),
+    )
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     report["symbols_analyzed"] = symbols
     report["from_cache"] = False
+    report["source_status"] = "fresh"
 
     if getattr(settings, "AI_DEBUG_TIMING", False):
         report["_debug_timing"] = {
@@ -177,8 +227,27 @@ async def generate_watchlist_report(
             },
         }
 
-    await cache_client.set(cache_key, report, expire_seconds=_REPORT_CACHE_TTL)
-    logger.info(f"{log_prefix} AI report cached (8h TTL) for cache_key={cache_key}")
+    await cache_client.set(
+        attempt_meta_key,
+        {
+            "status": "success",
+            "request_id": request_id,
+            "generated_at": report["generated_at"],
+        },
+        expire_seconds=max(60, int(getattr(settings, "AI_LAST_ATTEMPT_TTL_SECONDS", 21_600))),
+    )
+
+    if not bool(report.get("_mock")):
+        await cache_client.set(cache_key, report, expire_seconds=_REPORT_CACHE_TTL)
+        await cache_client.set(
+            last_good_key,
+            report,
+            expire_seconds=max(300, int(getattr(settings, "AI_LAST_GOOD_TTL_SECONDS", 86_400))),
+        )
+        logger.info(f"{log_prefix} AI report cached (8h TTL) for cache_key={cache_key}")
+    elif isinstance(last_good_cached, dict):
+        logger.warning("%s serving last-good report due to mock fallback", log_prefix)
+        return _decorate_last_good_report(last_good_cached, "fresh_analysis_mock_fallback")
 
     return report
 
@@ -419,8 +488,19 @@ async def _call_anthropic(
 
 Provide your analysis following the output format specified in your system instructions."""
 
-    try:
-        client = get_http_client()
+    call_deadline = time.monotonic() + max(1.0, timeout_seconds)
+
+    async def _post_messages(
+        *,
+        system_prompt: str,
+        content: str,
+        max_tokens: int,
+        step_name: str,
+    ) -> str:
+        remaining = _seconds_remaining(call_deadline)
+        if remaining <= 0:
+            raise asyncio.TimeoutError(f"No model budget left before step={step_name}")
+        client = get_llm_http_client()
         response = await client.post(
             _ANTHROPIC_API_URL,
             headers={
@@ -430,21 +510,26 @@ Provide your analysis following the output format specified in your system instr
             },
             json={
                 "model": _MODEL,
-                # Slightly lower max_tokens to reduce latency / timeout risk while
-                # still leaving plenty of headroom for rich analysis.
-                "max_tokens": 1200,
-                "system": _MASTER_PROMPT,
-                "messages": [
-                    {"role": "user", "content": user_message}
-                ],
+                "max_tokens": max_tokens,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": content}],
             },
-            timeout=max(1.0, timeout_seconds),
+            timeout=httpx.Timeout(connect=5.0, read=max(1.0, remaining), write=8.0, pool=5.0),
         )
         response.raise_for_status()
-        result = response.json()
+        payload = response.json()
+        text = payload.get("content", [{}])[0].get("text", "")
+        if not isinstance(text, str):
+            return ""
+        return text
 
-        # Extract the text content from Anthropic's response
-        text = result.get("content", [{}])[0].get("text", "")
+    try:
+        text = await _post_messages(
+            system_prompt=_MASTER_PROMPT,
+            content=user_message,
+            max_tokens=1200,
+            step_name="primary",
+        )
 
         parsed = _parse_ai_json_response(
             text=text,
@@ -454,29 +539,42 @@ Provide your analysis following the output format specified in your system instr
         if parsed is not None:
             return parsed
 
-        logger.error(
-            "%s failed to parse AI response as JSON. Raw length=%s first_200=%s",
+        logger.warning(
+            "%s primary model output was not valid JSON. len=%s first_200=%s",
             log_prefix,
             len(text),
             text[:200],
         )
 
-        # Best-effort fallback: preserve the real AI text in a structured envelope
-        # rather than discarding it or substituting a full mock.
-        max_len = 4000
-        truncated = text[:max_len] if isinstance(text, str) else ""
-        return {
-            "market_summary": "The AI engine returned an analysis that was not valid JSON. Showing the raw narrative instead.",
-            "watchlist_health": "MIXED",
-            "risk_level": "MODERATE",
-            "tactical_outlook": "See the detailed AI narrative for short-term context.",
-            "strategic_horizon": "See the detailed AI narrative for long-term context.",
-            "assets": [],
-            "overall_insight": truncated,
-            "_mock": False,
-            "parse_error": "Anthropic returned non-JSON response; using best-effort envelope.",
-            "raw_text": truncated,
-        }
+        # Formatter retry: convert narrative output into strict JSON schema.
+        remaining = _seconds_remaining(call_deadline)
+        if remaining > 1.0:
+            formatter_prompt = (
+                "Convert the following analysis text into VALID JSON using this schema keys only: "
+                "market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, assets, overall_insight. "
+                "For each asset include: symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
+                "Return JSON only, no markdown, no prose."
+            )
+            formatted_text = await _post_messages(
+                system_prompt="You are a strict JSON formatter.",
+                content=f"{formatter_prompt}\n\nANALYSIS_TEXT:\n{text}",
+                max_tokens=900,
+                step_name="formatter_retry",
+            )
+            parsed_retry = _parse_ai_json_response(
+                text=formatted_text,
+                parse_budget_seconds=min(parse_budget_seconds, 1.0),
+                log_prefix=log_prefix,
+            )
+            if parsed_retry is not None:
+                logger.info("%s formatter retry recovered valid JSON output", log_prefix)
+                return parsed_retry
+
+        return _generate_mock_report(
+            symbols,
+            data_context,
+            error_reason="Anthropic returned non-JSON output after formatter retry",
+        )
 
     except httpx.ReadTimeout as e:
         # Treat read timeouts as a hard pipeline timeout so the outer route-level
@@ -691,6 +789,97 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+async def get_last_good_report(user_id: str, symbols: List[str]) -> Optional[Dict[str, Any]]:
+    key = _last_good_report_key(user_id, symbols)
+    cached = await cache_client.get(key)
+    return cached if isinstance(cached, dict) else None
+
+
+def _last_good_report_key(user_id: str, symbols: List[str]) -> str:
+    return f"{_report_cache_key(user_id, symbols)}:last_good"
+
+
+def _last_attempt_meta_key(user_id: str, symbols: List[str]) -> str:
+    return f"{_report_cache_key(user_id, symbols)}:last_attempt"
+
+
+def _decorate_last_good_report(report: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    safe = dict(report)
+    safe["from_cache"] = True
+    safe["source_status"] = "last_good_fallback"
+    safe["_served_last_good"] = True
+    safe["_fallback_reason"] = reason
+    return safe
+
+
+def _safe_text(value: Any, default: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+def _normalize_asset(asset: Dict[str, Any]) -> Dict[str, Any]:
+    timeframe_signals = asset.get("timeframe_signals")
+    if not isinstance(timeframe_signals, dict):
+        timeframe_signals = {}
+    key_metrics = asset.get("key_metrics")
+    if not isinstance(key_metrics, dict):
+        key_metrics = {}
+    analysis_bullets = asset.get("analysis_bullets")
+    if not isinstance(analysis_bullets, list):
+        analysis_bullets = []
+    analysis_bullets = [str(item) for item in analysis_bullets[:6] if item is not None]
+    if not analysis_bullets:
+        analysis_bullets = ["Insufficient structured data to generate detailed bullet analysis."]
+
+    return {
+        "symbol": _safe_text(asset.get("symbol"), "UNKNOWN"),
+        "verdict": _safe_text(asset.get("verdict"), "NEUTRAL").upper(),
+        "timeframe_signals": {
+            "tactical_1h": _safe_text(timeframe_signals.get("tactical_1h"), "Neutral"),
+            "trend_1d": _safe_text(timeframe_signals.get("trend_1d"), "Neutral"),
+            "strategic_1w": _safe_text(timeframe_signals.get("strategic_1w"), "Neutral"),
+        },
+        "key_metrics": {
+            "rsi_daily": key_metrics.get("rsi_daily"),
+            "pe_ratio": key_metrics.get("pe_ratio"),
+            "macd_signal": _safe_text(key_metrics.get("macd_signal"), "Neutral"),
+        },
+        "analysis_bullets": analysis_bullets,
+        "catalyst": _safe_text(asset.get("catalyst"), "No immediate catalyst identified."),
+        "action_note": _safe_text(asset.get("action_note"), "Maintain disciplined risk management."),
+    }
+
+
+def _enforce_report_schema(report: Dict[str, Any], symbols: List[str], strict: bool) -> Dict[str, Any]:
+    payload = report if isinstance(report, dict) else {}
+    keys_present = set(payload.keys())
+    missing = _REPORT_REQUIRED_KEYS - keys_present
+
+    assets_raw = payload.get("assets")
+    assets: List[Dict[str, Any]] = []
+    if isinstance(assets_raw, list):
+        assets = [_normalize_asset(item) for item in assets_raw if isinstance(item, dict)]
+
+    if strict and missing:
+        logger.warning("strict schema repair engaged missing_keys=%s", sorted(missing))
+
+    if not assets and symbols:
+        assets = [{"symbol": s, "verdict": "NEUTRAL", "timeframe_signals": {"tactical_1h": "Neutral", "trend_1d": "Neutral", "strategic_1w": "Neutral"}, "key_metrics": {"rsi_daily": None, "pe_ratio": None, "macd_signal": "Neutral"}, "analysis_bullets": ["Data was incomplete during generation."], "catalyst": "No catalyst available.", "action_note": "Wait for a refreshed analysis."} for s in symbols]
+
+    return {
+        "market_summary": _safe_text(payload.get("market_summary"), "Markets are mixed and require selective positioning."),
+        "watchlist_health": _safe_text(payload.get("watchlist_health"), "MIXED").upper(),
+        "risk_level": _safe_text(payload.get("risk_level"), "MODERATE").upper(),
+        "tactical_outlook": _safe_text(payload.get("tactical_outlook"), "Short-term conditions are mixed; wait for confirmation."),
+        "strategic_horizon": _safe_text(payload.get("strategic_horizon"), "Long-term positioning remains data-dependent."),
+        "assets": assets,
+        "overall_insight": _safe_text(payload.get("overall_insight"), "Use risk controls and refresh analysis as conditions evolve."),
+        "_mock": bool(payload.get("_mock", False)),
+        "mock_reason": payload.get("mock_reason"),
+    }
+
 
 def _report_cache_key(user_id: str, symbols: List[str]) -> str:
     """Generate a deterministic cache key based on user + sorted symbols."""

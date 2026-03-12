@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     AI_ASSEMBLY_BUDGET_SECONDS: float = 6.0
     AI_MODEL_BUDGET_SECONDS: float = 16.0
     AI_PARSE_BUDGET_SECONDS: float = 1.5
+    AI_STRICT_JSON_ENFORCEMENT: bool = True
+    AI_ASYNC_JOBS_ENABLED: bool = True
+    AI_LOGIN_PREWARM_ENABLED: bool = True
+    AI_LAST_GOOD_TTL_SECONDS: int = 86_400
+    AI_LAST_ATTEMPT_TTL_SECONDS: int = 21_600
+    AI_JOB_TTL_SECONDS: int = 1_200
+    AI_PREWARM_COOLDOWN_SECONDS: int = 900
 
     # Config ensures Pydantic looks for a .env file and errors out if critical vars (like DATABASE_URL) are missing
     model_config = SettingsConfigDict(
