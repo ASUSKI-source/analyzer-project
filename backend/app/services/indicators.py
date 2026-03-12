@@ -41,7 +41,7 @@ async def get_cached_indicators(
         return cached
 
     # 2. Map timeframe to lookback days
-    lookback_map = {"1h": 5, "1d": 365, "1w": 730}
+    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730}
     days = lookback_map.get(timeframe, 365)
 
     # 3. Data Gathering Strategy
@@ -63,7 +63,11 @@ async def get_cached_indicators(
             if asset_id:
                 since = datetime.now() - timedelta(days=days)
                 cq = select(AssetCandle).where(
-                    and_(AssetCandle.asset_id == asset_id, AssetCandle.timestamp >= since)
+                    and_(
+                        AssetCandle.asset_id == asset_id, 
+                        AssetCandle.timestamp >= since,
+                        AssetCandle.timeframe == timeframe
+                    )
                 ).order_by(AssetCandle.timestamp.asc())
                 
                 cres = await db.execute(cq)
@@ -146,6 +150,125 @@ async def get_cached_indicators(
     logger.info(f"Cached {timeframe} indicators for {symbol} (4h TTL)")
     return result
 
+
+async def get_batch_indicators(
+    symbols: List[str],
+    timeframes: List[str],
+    db: Any
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Highly optimized batch fetching of indicators.
+    1. Checks cache for all pairs.
+    2. Performs a SINGLE DB query for all missing historical data.
+    3. Computes indicators in parallel.
+    
+    Returns: Mapping of {symbol: {timeframe: indicator_dict}}
+    """
+    from sqlalchemy import select, and_
+    from datetime import datetime, timedelta
+    from app.models.market import Asset, AssetCandle
+
+    results: Dict[str, Dict[str, Any]] = {sym: {} for sym in symbols}
+    to_fetch = [] # List of (symbol, tf)
+
+    # 1. Check cache first
+    for sym in symbols:
+        for tf in timeframes:
+            cache_key = f"indicators_cache:{sym}:{tf}"
+            cached = await cache_client.get(cache_key)
+            if cached:
+                results[sym][tf] = cached
+            else:
+                to_fetch.append((sym, tf))
+
+    if not to_fetch:
+        return results
+
+    # 2. Batch DB Lookup for missing ones
+    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730}
+    max_days = max(lookback_map.get(tf, 365) for _, tf in to_fetch)
+    since = datetime.now() - timedelta(days=max_days)
+    fetch_symbols = list(set(s for s, _ in to_fetch))
+
+    try:
+        # Get asset IDs mapping
+        aq = select(Asset.id, Asset.symbol).where(Asset.symbol.in_(fetch_symbols))
+        ares = await db.execute(aq)
+        asset_map = {row.symbol: row.id for row in ares.all()}
+        id_to_sym = {v: k for k, v in asset_map.items()}
+
+        if asset_map:
+            # Batch fetch all relevant candles for these assets
+            cq = select(AssetCandle).where(
+                and_(
+                    AssetCandle.asset_id.in_(asset_map.values()), 
+                    AssetCandle.timestamp >= since
+                )
+            ).order_by(AssetCandle.timestamp.asc())
+            
+            cres = await db.execute(cq)
+            all_candles = cres.scalars().all()
+
+            # Group candles by (asset_id, timeframe)
+            candles_by_bucket = {}
+            for c in all_candles:
+                bucket_key = (c.asset_id, c.timeframe)
+                if bucket_key not in candles_by_bucket:
+                    candles_by_bucket[bucket_key] = []
+                candles_by_bucket[bucket_key].append({
+                    "time": c.timestamp.isoformat(),
+                    "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume
+                })
+
+            # Process missing indicators
+            for sym, tf in to_fetch:
+                aid = asset_map.get(sym)
+                if not aid: continue
+                
+                asset_candles = candles_by_bucket.get((aid, tf), [])
+                
+                # Filter/Resample for specific timeframe
+                tf_candles = asset_candles
+                if tf == "1w":
+                    # Resample logic (copied/compacted from get_cached_indicators)
+                    if len(tf_candles) > 0:
+                        df = pd.DataFrame(tf_candles)
+                        df['time'] = pd.to_datetime(df['time'])
+                        df.set_index('time', inplace=True)
+                        resampled = df.resample('W-MON').agg({
+                            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                        }).dropna()
+                        tf_candles = resampled.reset_index().to_dict('records')
+                        for c in tf_candles: c['time'] = c['time'].isoformat()
+                elif tf == "1h":
+                    # For 1h we actually want live data usually, but this is a DB batch fallback
+                    # Optimization: 1h tactical is usually just 20-50 candles
+                    pass 
+
+                if len(tf_candles) >= 20:
+                    ti_obj = compute_technical_indicators(tf_candles)
+                    # Use existing serialization pattern
+                    ti_dict = {
+                        "symbol": sym, "timeframe": tf,
+                        "rsi_14": ti_obj.rsi, "macd_line": ti_obj.macd, "macd_signal": ti_obj.macd_signal,
+                        "macd_histogram": ti_obj.macd_hist, "sma_50": ti_obj.sma_50, "sma_200": ti_obj.sma_200,
+                        "ema_9": ti_obj.ema_9, "ema_21": ti_obj.ema_21,
+                        "bollinger_upper": ti_obj.bollinger_upper, "bollinger_lower": ti_obj.bollinger_lower,
+                        "trend_signal": ti_obj.trend_signal,
+                    }
+                    if ti_obj.rsi is not None:
+                        ti_dict["rsi_signal"] = "OVERBOUGHT" if ti_obj.rsi >= 70 else ("OVERSOLD" if ti_obj.rsi <= 30 else "NEUTRAL")
+                    
+                    results[sym][tf] = ti_dict
+                    # Cache it back
+                    cache_key = f"indicators_cache:{sym}:{tf}"
+                    await cache_client.set(cache_key, ti_dict, expire_seconds=_INDICATOR_CACHE_TTL)
+
+    except Exception as e:
+        logger.error(f"Batch indicator fetch failed: {e}")
+
+    return results
+
 def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     """
     Takes a list of candles (dicts) and returns a TechnicalIndicators object.
@@ -158,7 +281,9 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     # Convert to DataFrame - supports both dicts and pydantic models
     data = []
     for c in candles:
-        if hasattr(c, "model_dump"):
+        if isinstance(c, dict):
+            data.append(c)
+        elif hasattr(c, "model_dump"):
             data.append(c.model_dump())
         else:
             data.append(c)

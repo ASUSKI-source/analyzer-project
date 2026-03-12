@@ -20,6 +20,7 @@ import httpx
 from app.core.cache import cache_client
 from app.core.config import settings
 from app.utils.http import get_http_client
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ _FUNDAMENTALS_CACHE_TTL = 43_200 # 12 hours — Finnhub fundamentals
 
 # ─── Anthropic Config ────────────────────────────────────────────────────────
 _ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL = "claude-haiku-4-5"  # Fast, cheap, smart enough for financial summaries
+_MODEL = "claude-3-5-haiku-latest"  # Ultra-fast, optimized for structured output
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -81,10 +82,16 @@ async def generate_watchlist_report(
     await cache_client.set(cooldown_key, "active", expire_seconds=300)
 
     # ── 2. Multi-Tier Data Assembly ──────────────────────────────────────────
+    start_assembly = time.time()
     data_context = await _assemble_data_context(symbols, db)
+    assembly_duration = time.time() - start_assembly
+    logger.info(f"Data assembly for {symbols} took {assembly_duration:.2f}s")
 
     # ── 3. Call Anthropic ────────────────────────────────────────────────────
+    start_ai = time.time()
     report = await _call_anthropic(symbols, data_context)
+    ai_duration = time.time() - start_ai
+    logger.info(f"Anthropic call for {symbols} took {ai_duration:.2f}s")
 
     # ── 4. Cache & Return ────────────────────────────────────────────────────
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -103,70 +110,49 @@ async def generate_watchlist_report(
 
 async def _assemble_data_context(symbols: List[str], db: Any) -> Dict[str, Any]:
     """
-    Gathers data from three tiers concurrently:
+    Gathers data from three tiers concurrently using batch methods.
       Tier 1: Live prices (DataBroker, 10s cache)
       Tier 2: Technical indicators (indicators.py, 4h cache)
-      Tier 3: Fundamentals + News (Finnhub, 12h cache)
+      Tier 3: Batch Fundamentals + Batch News (Finnhub, 12h cache)
     
-    Has a strict 15-second timeout to prevent Railway proxy kills.
+    Uses 'Optimistic Assembly': If sub-batches fail or lag, we ship partial data 
+    rather than timing out the entire report.
     """
     from app.services.providers.broker import get_broker
-    from app.services.indicators import get_cached_indicators
-    from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment
+    from app.services.indicators import get_batch_indicators
+    from app.services.finnhub import get_batch_fundamentals, get_batch_news_sentiment
 
-    # PERFORMANCE RAIL: Limit concurrency to avoid slamming DB/APIs
-    semaphore = asyncio.Semaphore(5)
+    # 1. Start all batch tasks
+    price_task = get_broker().fetch_quotes(symbols)
+    ti_task = get_batch_indicators(symbols, ["1h", "1d", "1w"], db)
+    fund_task = get_batch_fundamentals(symbols)
+    news_task = get_batch_news_sentiment(symbols)
 
-    async def _gather_with_semaphore(coro):
-        async with semaphore:
-            return await coro
-
-    # Tier 1: Live prices
-    price_task = _gather_with_semaphore(get_broker().fetch_quotes(symbols))
-
-    # Tier 2: Technical indicators (3 horizons per symbol)
-    # 1d and 1w now use the local DB session for much faster assembly
-    indicator_tasks = []
-    for sym in symbols:
-        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1h", db)))
-        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1d", db)))
-        indicator_tasks.append(_gather_with_semaphore(get_cached_indicators(sym, "1w", db)))
-
-    # Tier 3: Fundamentals
-    fundamental_tasks = [_gather_with_semaphore(_get_cached_fundamentals(sym)) for sym in symbols]
-
-    # Tier 3b: News sentiment
-    news_tasks = [_gather_with_semaphore(fetch_news_sentiment(sym)) for sym in symbols]
-
-    # Execute all tiers with a strict timeout.
-    n = len(symbols)
+    # 2. Execute with a strict assembly timeout (Railway safety rail)
     try:
-        all_results = await asyncio.wait_for(
+        results = await asyncio.wait_for(
             asyncio.gather(
                 price_task,
-                *indicator_tasks,
-                *fundamental_tasks,
-                *news_tasks,
-                return_exceptions=True,
+                ti_task,
+                fund_task,
+                news_task,
+                return_exceptions=True
             ),
-            timeout=15.0,
+            timeout=12.0 # Give AI some time to breathe within the 25s window
         )
-        prices = all_results[0]
-        ti_results = list(all_results[1 : 3 * n + 1])
-        fundamentals_raw = list(all_results[3 * n + 1 : 4 * n + 1])
-        news_raw = list(all_results[4 * n + 1 : 5 * n + 1])
+        
+        prices = results[0] if not isinstance(results[0], Exception) else []
+        ti_batch = results[1] if not isinstance(results[1], Exception) else {}
+        fundamentals_batch = results[2] if not isinstance(results[2], Exception) else []
+        news_batch = results[3] if not isinstance(results[3], Exception) else []
+        
     except asyncio.TimeoutError:
-        logger.warning("Data assembly timed out after 15s. Proceeding with empty data context.")
-        prices = []
-        ti_results = [None] * (3 * n)
-        fundamentals_raw = [None] * n
-        news_raw = [None] * n
+        logger.warning(f"Data assembly for {symbols} hit 12s timeout. Collating partial data.")
+        prices, ti_batch, fundamentals_batch, news_batch = [], {}, [], []
 
-    # Build per-asset context
-    price_map = {}
-    if isinstance(prices, list):
-        price_map = {p["symbol"]: p for p in prices}
-
+    # 3. Collate per-asset context
+    price_map = {p["symbol"]: p for p in prices if isinstance(p, dict) and "symbol" in p} if isinstance(prices, list) else {}
+    
     assets = []
     for i, sym in enumerate(symbols):
         asset: Dict[str, Any] = {"symbol": sym}
@@ -176,26 +162,31 @@ async def _assemble_data_context(symbols: List[str], db: Any) -> Dict[str, Any]:
         asset["price"] = price_data.get("price", 0)
         asset["change_percent"] = price_data.get("changePercent", 0)
 
-        # Multi-Horizon Technicals
-        # Order in ti_results is sym0_1h, sym0_1d, sym0_1w, sym1_1h...
-        offset = i * 3
-        asset["technicals"] = {
-            "1h": ti_results[offset] if not isinstance(ti_results[offset], Exception) else {},
-            "1d": ti_results[offset+1] if not isinstance(ti_results[offset+1], Exception) else {},
-            "1w": ti_results[offset+2] if not isinstance(ti_results[offset+2], Exception) else {}
-        }
+        # Technicals
+        asset["technicals"] = ti_batch.get(sym, {
+            "1h": {}, "1d": {}, "1w": {}
+        }) if isinstance(ti_batch, dict) else {"1h": {}, "1d": {}, "1w": {}}
 
-        # Fundamentals
-        fund = fundamentals_raw[i] if i < len(fundamentals_raw) and not isinstance(fundamentals_raw[i], Exception) else None
-        asset["fundamentals"] = fund if fund else {}
+        # Fundamentals (Optimistic collation)
+        fund = {}
+        if isinstance(fundamentals_batch, list) and i < len(fundamentals_batch):
+            f_item = fundamentals_batch[i]
+            if isinstance(f_item, dict):
+                fund = f_item
+        asset["fundamentals"] = fund
 
-        # News sentiment
-        news = news_raw[i] if i < len(news_raw) and not isinstance(news_raw[i], Exception) else None
-        asset["news_sentiment"] = news if news else {}
+        # News (Optimistic collation)
+        news = {}
+        if isinstance(news_batch, list) and i < len(news_batch):
+            n_item = news_batch[i]
+            if isinstance(n_item, dict):
+                news = n_item
+        asset["news_sentiment"] = news
 
         assets.append(asset)
 
     return {"assets": assets, "timestamp": datetime.now(timezone.utc).isoformat()}
+
 
 
 async def _get_cached_fundamentals(symbol: str) -> Dict[str, Any]:
@@ -347,9 +338,9 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
         fund = asset_data.get("fundamentals", {})
 
         ti_all = asset_data.get("technicals", {})
-        ti_1h = ti_all.get("1h", {})
-        ti_1d = ti_all.get("1d", {})
-        ti_1w = ti_all.get("1w", {})
+        ti_1h = ti_all.get("1h", {}) or {}
+        ti_1d = ti_all.get("1d", {}) or {}
+        ti_1w = ti_all.get("1w", {}) or {}
 
         rsi_1d = ti_1d.get("rsi_14")
         trend_1d = ti_1d.get("trend_signal", "Neutral")

@@ -36,6 +36,9 @@ class AssetCandle(Base):
     # but for SQLAlchemy compatibility, we keep a surrogate UUID and index the timestamp heavily.
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     
+    # resolution/timeframe: '5m', '1h', '1d', '1w'
+    timeframe = Column(String, default="1d", nullable=False, index=True)
+    
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
     low = Column(Float, nullable=False)
@@ -46,7 +49,7 @@ class AssetCandle(Base):
 
     asset = relationship("Asset", back_populates="candles")
 
-    # Ensure we don't store duplicate candles for the same exact time and asset
+    # Ensure we don't store duplicate candles for the same exact time, asset, and resolution
     __table_args__ = (
-        UniqueConstraint('asset_id', 'timestamp', name='uix_asset_timestamp'),
+        UniqueConstraint('asset_id', 'timestamp', 'timeframe', name='uix_asset_timestamp_tf'),
     )
