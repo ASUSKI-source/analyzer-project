@@ -41,7 +41,7 @@ async def get_cached_indicators(
         return cached
 
     # 2. Map timeframe to lookback days
-    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730}
+    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730, "1m": 1460}
     days = lookback_map.get(timeframe, 365)
 
     # 3. Data Gathering Strategy
@@ -94,14 +94,14 @@ async def get_cached_indicators(
                         )
                     logger.info(f"Using DB-backed candles for {symbol} ({timeframe}) - {len(candles)} points")
                     
-                    # 4. WEEKLY RESAMPLING (Strategic Horizon)
-                    if timeframe == "1w" and len(candles) > 0:
+                    # 4. WEEKLY/MONTHLY RESAMPLING (Strategic Horizons)
+                    if timeframe in ["1w", "1m"] and len(candles) > 0:
                         df = pd.DataFrame(candles)
                         df['time'] = pd.to_datetime(df['time'])
                         df.set_index('time', inplace=True)
-                        
-                        # Resample to weekly (Monday start)
-                        resampled = df.resample('W-MON').agg({
+
+                        resample_rule = "W-MON" if timeframe == "1w" else "MS"
+                        resampled = df.resample(resample_rule).agg({
                             'open': 'first',
                             'high': 'max',
                             'low': 'min',
@@ -112,7 +112,7 @@ async def get_cached_indicators(
                         candles = resampled.reset_index().to_dict('records')
                         for c in candles:
                             c['time'] = c['time'].isoformat()
-                        logger.info(f"Resampled to {len(candles)} weekly candles for {symbol}")
+                        logger.info(f"Resampled to {len(candles)} {timeframe} candles for {symbol}")
         except Exception as db_err:
             logger.error(f"Fallback to live: DB indicator fetch failed for {symbol}: {db_err}")
 
@@ -143,6 +143,7 @@ async def get_cached_indicators(
         "sma_200": ti.sma_200,
         "ema_9": ti.ema_9,
         "ema_21": ti.ema_21,
+        "sma_20": ti.sma_20,
         "bollinger_upper": ti.bollinger_upper,
         "bollinger_lower": ti.bollinger_lower,
         "trend_signal": ti.trend_signal,
@@ -196,7 +197,7 @@ async def get_batch_indicators(
         return results
 
     # 2. Batch DB Lookup for missing ones
-    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730}
+    lookback_map = {"5m": 2, "1h": 5, "1d": 365, "1w": 730, "1m": 1460}
     max_days = max(lookback_map.get(tf, 365) for _, tf in to_fetch)
     since = datetime.now() - timedelta(days=max_days)
     fetch_symbols = list(set(s for s, _ in to_fetch))
@@ -240,13 +241,14 @@ async def get_batch_indicators(
                 
                 # Filter/Resample for specific timeframe
                 tf_candles = asset_candles
-                if tf == "1w":
+                if tf in ["1w", "1m"]:
                     # Resample logic (copied/compacted from get_cached_indicators)
                     if len(tf_candles) > 0:
                         df = pd.DataFrame(tf_candles)
                         df['time'] = pd.to_datetime(df['time'])
                         df.set_index('time', inplace=True)
-                        resampled = df.resample('W-MON').agg({
+                        resample_rule = "W-MON" if tf == "1w" else "MS"
+                        resampled = df.resample(resample_rule).agg({
                             'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
                         }).dropna()
                         tf_candles = resampled.reset_index().to_dict('records')
@@ -263,7 +265,7 @@ async def get_batch_indicators(
                         "symbol": sym, "timeframe": tf,
                         "rsi_14": ti_obj.rsi, "macd_line": ti_obj.macd, "macd_signal": ti_obj.macd_signal,
                         "macd_histogram": ti_obj.macd_hist, "sma_50": ti_obj.sma_50, "sma_200": ti_obj.sma_200,
-                        "ema_9": ti_obj.ema_9, "ema_21": ti_obj.ema_21,
+                        "ema_9": ti_obj.ema_9, "ema_21": ti_obj.ema_21, "sma_20": ti_obj.sma_20,
                         "bollinger_upper": ti_obj.bollinger_upper, "bollinger_lower": ti_obj.bollinger_lower,
                         "trend_signal": ti_obj.trend_signal,
                     }
@@ -315,7 +317,8 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     macd_signal = macd_indicator.macd_signal()
     macd_diff = macd_indicator.macd_diff()
 
-    # 3. Simple Moving Averages (50 and 200)
+    # 3. Simple Moving Averages (20, 50 and 200)
+    sma_20 = ta.trend.SMAIndicator(close=close, window=20).sma_indicator()
     sma_50 = ta.trend.SMAIndicator(close=close, window=50).sma_indicator()
     sma_200 = ta.trend.SMAIndicator(close=close, window=200).sma_indicator()
     
@@ -347,6 +350,7 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
         macd=round(macd.iloc[-1], 2) if not pd.isna(macd.iloc[-1]) else None,
         macd_signal=round(macd_signal.iloc[-1], 2) if not pd.isna(macd_signal.iloc[-1]) else None,
         macd_hist=round(macd_diff.iloc[-1], 2) if not pd.isna(macd_diff.iloc[-1]) else None,
+        sma_20=round(sma_20.iloc[-1], 2) if not pd.isna(sma_20.iloc[-1]) else None,
         sma_50=round(sma_50.iloc[-1], 2) if not pd.isna(sma_50.iloc[-1]) else None,
         sma_200=round(sma_200.iloc[-1], 2) if not pd.isna(sma_200.iloc[-1]) else None,
         ema_9=round(ema_9.iloc[-1], 2) if not pd.isna(ema_9.iloc[-1]) else None,

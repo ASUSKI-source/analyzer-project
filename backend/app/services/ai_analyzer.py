@@ -274,10 +274,15 @@ async def _assemble_data_context(
     from app.services.providers.broker import get_broker
     from app.services.indicators import get_batch_indicators
     from app.services.finnhub import get_batch_fundamentals
+    from app.services.snapshot_read_service import get_snapshot_bundle_for_symbols
 
     stage_metrics: Dict[str, Any] = {}
     include_news = bool(getattr(settings, "AI_INCLUDE_NEWS_SENTIMENT", False))
+    provider_fallback_enabled = bool(getattr(settings, "AI_PROVIDER_FALLBACK_ENABLED", True))
+    snapshot_reads_enabled = bool(getattr(settings, "AI_SNAPSHOT_READS_ENABLED", True))
     stage_metrics["news_included"] = include_news
+    stage_metrics["provider_fallback_enabled"] = provider_fallback_enabled
+    stage_metrics["snapshot_reads_enabled"] = snapshot_reads_enabled
 
     async def _timed_step(name: str, coroutine: Any) -> Any:
         started = time.monotonic()
@@ -295,18 +300,49 @@ async def _assemble_data_context(
             )
             return e
 
+    async def _constant(value: Any) -> Any:
+        return value
+
+    required_timeframes = ["1h", "1d", "1w", "1m"]
+
+    if snapshot_reads_enabled:
+        snapshot_bundle = await _timed_step("snapshot_read", get_snapshot_bundle_for_symbols(db, symbols))
+        if not isinstance(snapshot_bundle, dict):
+            snapshot_bundle = {}
+    else:
+        snapshot_bundle = {}
+
+    missing_indicator_symbols = []
+    for sym in symbols:
+        sym_bundle = snapshot_bundle.get(sym, {})
+        tf_map = sym_bundle.get("technicals_by_timeframe", {}) if isinstance(sym_bundle, dict) else {}
+        if any(tf not in tf_map for tf in required_timeframes):
+            missing_indicator_symbols.append(sym)
+
     news_coro: Any
-    if include_news:
+    if include_news and provider_fallback_enabled:
         from app.services.finnhub import get_batch_news_sentiment
         news_coro = get_batch_news_sentiment(symbols)
     else:
         news_coro = _empty_news_batch(symbols)
 
     # 1. Start all batch tasks
+    indicator_symbols = missing_indicator_symbols if missing_indicator_symbols else symbols
+    indicator_coro = (
+        get_batch_indicators(indicator_symbols, required_timeframes, db)
+        if provider_fallback_enabled
+        else _constant({})
+    )
+    fundamentals_coro = (
+        get_batch_fundamentals(symbols)
+        if provider_fallback_enabled
+        else _constant([{} for _ in symbols])
+    )
+
     wrapped_tasks = [
         _timed_step("quotes", get_broker().fetch_quotes(symbols)),
-        _timed_step("indicators", get_batch_indicators(symbols, ["1h", "1d", "1w"], db)),
-        _timed_step("fundamentals", get_batch_fundamentals(symbols)),
+        _timed_step("indicators", indicator_coro),
+        _timed_step("fundamentals", fundamentals_coro),
         _timed_step("news", news_coro),
     ]
 
@@ -343,32 +379,64 @@ async def _assemble_data_context(
         if price_data.get("is_stale") or str(price_data.get("source", "")).startswith("db_"):
             stale_price_count += 1
 
-        # Technicals
-        asset["technicals"] = ti_batch.get(sym, {
-            "1h": {}, "1d": {}, "1w": {}
-        }) if isinstance(ti_batch, dict) else {"1h": {}, "1d": {}, "1w": {}}
+        # Technicals: snapshot-first + provider fallback merge
+        snapshot_for_symbol = snapshot_bundle.get(sym, {}) if isinstance(snapshot_bundle, dict) else {}
+        snapshot_technicals = snapshot_for_symbol.get("technicals_by_timeframe", {}) if isinstance(snapshot_for_symbol, dict) else {}
+        fallback_technicals = ti_batch.get(sym, {}) if isinstance(ti_batch, dict) else {}
 
-        # Fundamentals (Optimistic collation)
-        fund = {}
+        merged_technicals: Dict[str, Any] = {}
+        for tf in required_timeframes:
+            snap_tf = snapshot_technicals.get(tf, {}) if isinstance(snapshot_technicals, dict) else {}
+            fb_tf = fallback_technicals.get(tf, {}) if isinstance(fallback_technicals, dict) else {}
+            merged = dict(fb_tf or {})
+            merged.update(snap_tf or {})
+            merged_technicals[tf] = merged if merged else {}
+        asset["technicals"] = merged_technicals
+
+        # Fundamentals: snapshot-first + fallback provider collation
+        fund = snapshot_for_symbol.get("fundamentals_snapshot", {}) if isinstance(snapshot_for_symbol, dict) else {}
+        if not isinstance(fund, dict):
+            fund = {}
         if isinstance(fundamentals_batch, list) and i < len(fundamentals_batch):
             f_item = fundamentals_batch[i]
             if isinstance(f_item, dict):
-                fund = f_item
+                merged_fund = dict(f_item)
+                merged_fund.update(fund)
+                fund = merged_fund
         asset["fundamentals"] = fund
 
-        # News (Optimistic collation)
-        news = {}
+        # Events/News: snapshot-first with fallback news sentiment merge
+        events_snapshot = snapshot_for_symbol.get("events_and_news_snapshot", {}) if isinstance(snapshot_for_symbol, dict) else {}
+        news = {
+            "trending_topics": events_snapshot.get("news_topics", []) if isinstance(events_snapshot, dict) else [],
+            "earnings_events": events_snapshot.get("earnings", []) if isinstance(events_snapshot, dict) else [],
+        }
         if isinstance(news_batch, list) and i < len(news_batch):
             n_item = news_batch[i]
             if isinstance(n_item, dict):
-                news = n_item
+                merged_news = dict(n_item)
+                merged_news.update(news)
+                news = merged_news
         asset["news_sentiment"] = news
+        asset["coverage"] = snapshot_for_symbol.get("coverage", {}) if isinstance(snapshot_for_symbol, dict) else {}
 
         assets.append(asset)
 
     stage_metrics["resolved_price_count"] = float(len(price_map))
     stage_metrics["stale_price_count"] = float(stale_price_count)
     stage_metrics["asset_count"] = float(len(assets))
+    if assets:
+        coverage_scores = []
+        for a in assets:
+            cov = a.get("coverage", {})
+            if isinstance(cov, dict):
+                for tf, details in cov.items():
+                    if isinstance(details, dict):
+                        score = details.get("coverage_score")
+                        if isinstance(score, (int, float)):
+                            coverage_scores.append(float(score))
+        if coverage_scores:
+            stage_metrics["avg_coverage_score"] = round(sum(coverage_scores) / len(coverage_scores), 3)
     logger.info(
         f"{log_prefix} assembly summary assets={len(assets)} resolved_prices={len(price_map)} "
         f"stale_prices={stale_price_count} news_included={include_news}"
@@ -415,10 +483,11 @@ Your mission is to bridge the gap between complex market data and actionable, hu
 ## Your Analysis Guidelines
 - **Be direct and honest:** No fluff, no hype. If the data looks weak, say so plainly.
 - **Evidence-Based:** Ground every observation in the DATA provided below.
-- **Three-Horizon Nuance:** Contrast the three timeframes provided (1h, 1d, 1w). 
+- **Multi-Horizon Nuance:** Contrast the provided timeframes (1h, 1d, 1w, 1m when available). 
   - *Tactical (1h):* Use EMA_9/EMA_21 crossovers for immediate entry/exit signals.
   - *Trend (1d):* The medium-term directional flow and SMA_50 support.
   - *Strategic (1w):* High-timeframe structural health and major cycles.
+  - *Regime (1m):* Monthly structure should inform valuation/risk framing when present.
 - **Highlight Conflicts:** If an asset is bullish on the Weekly but overextended on the 1h, flag it as a "Tactical Caution."
 - **No external news dependence required:** Base conclusions on provided technical/fundamental fields even when news sentiment is missing.
 
@@ -1044,7 +1113,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
         # 2. Strategic technical pruning for large lists
         if symbol_count > 5:
             technicals = p_asset.get("technicals", {})
-            for timeframe in ["1h", "1d", "1w"]:
+            for timeframe in ["1h", "1d", "1w", "1m"]:
                 tf_data = technicals.get(timeframe, {})
                 if tf_data:
                     # Keep core trend indicators, lose volatility/secondary ones
@@ -1053,7 +1122,8 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
                         "rsi_14": tf_data.get("rsi_14"),
                         "ema_9": tf_data.get("ema_9"),
                         "ema_21": tf_data.get("ema_21"),
-                        "sma_50": tf_data.get("sma_50") if timeframe == "1d" else None
+                        "sma_50": tf_data.get("sma_50") if timeframe in ["1d", "1m"] else None,
+                        "sma_200": tf_data.get("sma_200") if timeframe == "1m" else None,
                     }
                     technicals[timeframe] = {k: v for k, v in slim_tf.items() if v is not None}
         

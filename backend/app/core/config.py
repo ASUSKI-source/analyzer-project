@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     AI_LAST_ATTEMPT_TTL_SECONDS: int = 21_600
     AI_JOB_TTL_SECONDS: int = 1_200
     AI_PREWARM_COOLDOWN_SECONDS: int = 900
+    AI_SNAPSHOT_READS_ENABLED: bool = True
+    AI_PROVIDER_FALLBACK_ENABLED: bool = True
+    REQUIRE_DB_BASELINE_MIGRATIONS: bool = True
+
+    SNAPSHOT_TECHNICAL_TTL_SECONDS: int = 21_600
+    SNAPSHOT_FUNDAMENTAL_TTL_SECONDS: int = 86_400
+    SNAPSHOT_EVENT_TTL_SECONDS: int = 21_600
+    SNAPSHOT_COVERAGE_TTL_SECONDS: int = 21_600
+
+    # Celery scheduler controls for robust background enrichment.
+    CELERY_SNAPSHOT_TECHNICAL_CRON: str = "7 * * * *"
+    CELERY_SNAPSHOT_FUNDAMENTAL_CRON: str = "20 */6 * * *"
+    CELERY_SNAPSHOT_EVENT_CRON: str = "35 */2 * * *"
 
     # Config ensures Pydantic looks for a .env file and errors out if critical vars (like DATABASE_URL) are missing
     model_config = SettingsConfigDict(

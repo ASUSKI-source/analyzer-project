@@ -6,6 +6,8 @@ from app.core.errors import AppException
 from app.api.router import api_router
 from app.core.config import settings
 from app.services.stream import streamer
+from app.core.database import engine
+from app.core.migration_guard import assert_required_schema
 
 # Configure basic logging for the entire app to catch errors clearly
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +43,8 @@ from app.core.cache import cache_client
 @app.on_event("startup")
 async def startup_event():
     logger.info("Application starting up...")
+    if getattr(settings, "REQUIRE_DB_BASELINE_MIGRATIONS", True):
+        await assert_required_schema(engine)
     await cache_client.connect()
 
     # Start the Finnhub Real-time Streamer

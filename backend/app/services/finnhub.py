@@ -192,6 +192,75 @@ async def get_batch_news_sentiment(symbols: List[str]) -> List[Dict[str, Any]]:
     return list(await asyncio.gather(*tasks))
 
 
+# ─── EARNINGS EVENTS ────────────────────────────────────────────────────────
+
+async def fetch_earnings_events(symbol: str) -> List[Dict[str, Any]]:
+    """
+    Fetch near-term earnings events for a symbol.
+    Returns normalized event rows for snapshot ingestion.
+    """
+    symbol = symbol.upper()
+    if not _has_valid_key():
+        return []
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    horizon = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%d")
+    url = "https://finnhub.io/api/v1/calendar/earnings"
+
+    try:
+        client = get_http_client()
+        response = await client.get(
+            url,
+            params={
+                "symbol": symbol,
+                "from": today,
+                "to": horizon,
+                "token": settings.FINNHUB_API_KEY,
+            },
+            timeout=10.0,
+        )
+        if response.status_code in [401, 403]:
+            await cache_client.set("circuit_breaker:finnhub", "tripped", expire_seconds=300)
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        out: List[Dict[str, Any]] = []
+        for item in payload.get("earningsCalendar", []) or []:
+            report_date = item.get("date")
+            if not report_date:
+                continue
+            try:
+                event_dt = datetime.fromisoformat(report_date)
+            except Exception:
+                event_dt = datetime.utcnow()
+            out.append(
+                {
+                    "event_time": event_dt,
+                    "event_type": "earnings",
+                    "headline": f"{symbol} earnings on {report_date}",
+                    "sentiment_score": None,
+                    "relevance_score": 1.0,
+                    "payload": {
+                        "epsEstimate": item.get("epsEstimate"),
+                        "epsActual": item.get("epsActual"),
+                        "revenueEstimate": item.get("revenueEstimate"),
+                        "revenueActual": item.get("revenueActual"),
+                    },
+                }
+            )
+        return out
+    except Exception as e:
+        logger.warning(f"Finnhub earnings event error for {symbol}: {e}")
+        return []
+
+
+async def get_batch_earnings_events(symbols: List[str]) -> List[List[Dict[str, Any]]]:
+    if await cache_client.get("circuit_breaker:finnhub"):
+        return [[] for _ in symbols]
+    tasks = [fetch_earnings_events(s) for s in symbols]
+    return list(await asyncio.gather(*tasks))
+
+
 # ─── FUNDAMENTALS ────────────────────────────────────────────────────────────
 
 async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:

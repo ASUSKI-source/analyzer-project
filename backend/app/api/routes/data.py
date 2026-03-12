@@ -20,6 +20,13 @@ from app.services.aggregator import fetch_watchlist_prices, generate_dashboard_p
 from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment
 from app.services.indicators import compute_technical_indicators
 from app.services.market_data import get_asset_history, sync_asset_history
+from app.services.snapshot_read_service import get_snapshot_bundle_for_symbols
+from app.tasks.snapshot_tasks import (
+    backfill_snapshot_universe_task,
+    sync_event_snapshots_task,
+    sync_fundamental_snapshots_task,
+    sync_technical_snapshots_task,
+)
 
 router = APIRouter()
 
@@ -66,9 +73,10 @@ async def get_asset_analysis(
     history_task = get_asset_history(db=db, symbol=symbol, days=250)
     fundamentals_task = fetch_fundamentals(symbol)
     sentiment_task = fetch_news_sentiment(symbol)
+    snapshot_task = get_snapshot_bundle_for_symbols(db, [symbol])
 
-    price_results, history, fundamentals, sentiment = await asyncio.gather(
-        prices_task, history_task, fundamentals_task, sentiment_task
+    price_results, history, fundamentals, sentiment, snapshot_bundle = await asyncio.gather(
+        prices_task, history_task, fundamentals_task, sentiment_task, snapshot_task
     )
 
     # Extract Quote
@@ -79,8 +87,29 @@ async def get_asset_analysis(
     # (The first task might have been mock, but we use the best available price here)
     history = await get_asset_history(db=db, symbol=symbol, days=250, current_price=quote.price)
 
-    # Compute Technicals
-    technicals = compute_technical_indicators(history)
+    # Technicals: snapshot-first with fallback computation.
+    technicals_payload = {}
+    if isinstance(snapshot_bundle, dict):
+        technicals_payload = (
+            snapshot_bundle.get(symbol, {})
+            .get("technicals_by_timeframe", {})
+            .get("1d", {})
+        )
+    if technicals_payload:
+        technicals = TechnicalIndicators(
+            rsi=technicals_payload.get("rsi_14"),
+            macd=technicals_payload.get("macd_line"),
+            macd_signal=technicals_payload.get("macd_signal"),
+            macd_hist=technicals_payload.get("macd_histogram"),
+            sma_20=technicals_payload.get("sma_20"),
+            sma_50=technicals_payload.get("sma_50"),
+            sma_200=technicals_payload.get("sma_200"),
+            ema_9=technicals_payload.get("ema_9"),
+            ema_21=technicals_payload.get("ema_21"),
+            trend_signal=technicals_payload.get("trend_signal") or "Neutral",
+        )
+    else:
+        technicals = compute_technical_indicators(history)
 
     return AssetAnalysisResponse(
         symbol=symbol,
@@ -158,3 +187,31 @@ async def get_asset_sentiment(symbol: str):
     symbol = symbol.upper()
     sentiment = await fetch_news_sentiment(symbol)
     return sentiment
+
+
+@router.post("/snapshots/sync")
+async def trigger_snapshot_sync(
+    _admin_user: User = Depends(get_admin_user),
+):
+    """
+    Trigger canonical snapshot synchronization tasks.
+    """
+    technical_job = sync_technical_snapshots_task.delay()
+    fundamental_job = sync_fundamental_snapshots_task.delay()
+    event_job = sync_event_snapshots_task.delay()
+    return {
+        "status": "queued",
+        "jobs": {
+            "technical": technical_job.id,
+            "fundamental": fundamental_job.id,
+            "events": event_job.id,
+        },
+    }
+
+
+@router.post("/snapshots/backfill")
+async def trigger_snapshot_backfill(
+    _admin_user: User = Depends(get_admin_user),
+):
+    job = backfill_snapshot_universe_task.delay()
+    return {"status": "queued", "job_id": job.id}

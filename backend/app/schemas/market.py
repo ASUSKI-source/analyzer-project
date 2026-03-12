@@ -70,6 +70,7 @@ class TechnicalIndicators(BaseModel):
     macd: Optional[float] = None
     macd_signal: Optional[float] = None
     macd_hist: Optional[float] = None
+    sma_20: Optional[float] = None
     sma_50: Optional[float] = None
     sma_200: Optional[float] = None
     ema_9: Optional[float] = None
