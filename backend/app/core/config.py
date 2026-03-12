@@ -30,10 +30,13 @@ class Settings(BaseSettings):
     # We bias more time toward the model call now that news sentiment is disabled
     # by default (assembly is cheaper, so we can shrink its budget).
     AI_TOTAL_BUDGET_SECONDS: float = 24.0
-    AI_ASSEMBLY_BUDGET_SECONDS: float = 6.0
-    AI_MODEL_BUDGET_SECONDS: float = 16.0
+    AI_ASSEMBLY_BUDGET_SECONDS: float = 5.0
+    AI_MODEL_BUDGET_SECONDS: float = 17.0
     AI_PARSE_BUDGET_SECONDS: float = 1.5
     AI_STRICT_JSON_ENFORCEMENT: bool = True
+    # When False (default), model/network failures should prefer last-good/error paths
+    # over simulated narrative reports.
+    AI_ALLOW_SIMULATED_FALLBACK: bool = False
     AI_ASYNC_JOBS_ENABLED: bool = True
     AI_LOGIN_PREWARM_ENABLED: bool = True
     AI_LAST_GOOD_TTL_SECONDS: int = 86_400

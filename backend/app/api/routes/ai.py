@@ -108,6 +108,11 @@ async def get_watchlist_analysis(
             last_good["source_status"] = "last_good_fallback"
             last_good["_served_last_good"] = True
             last_good["_fallback_reason"] = "route_timeout"
+            last_good["_analysis_origin"] = {
+                "is_mock": bool(last_good.get("_mock", False)),
+                "path": "last_good_fallback",
+                "reason": "route_timeout",
+            }
             return last_good
         timeout_response = {
             "market_summary": "Analysis timed out. This often happens if the data provider (Finnhub) is under heavy load or rate-limiting. We are currently optimizing data assembly to be more resilient.",
@@ -118,6 +123,11 @@ async def get_watchlist_analysis(
             "overall_insight": "The engine timed out gathering live data. Try again in a few moments — cached data from this attempt will make the next one significantly faster.",
             "_timeout": True,
             "_mock": False,
+            "_analysis_origin": {
+                "is_mock": False,
+                "path": "route_timeout_no_last_good",
+                "reason": "route_timeout",
+            },
         }
         if getattr(settings, "AI_DEBUG_TIMING", False):
             timeout_response["_debug_timing"] = {
@@ -134,6 +144,11 @@ async def get_watchlist_analysis(
             last_good["source_status"] = "last_good_fallback"
             last_good["_served_last_good"] = True
             last_good["_fallback_reason"] = "route_error"
+            last_good["_analysis_origin"] = {
+                "is_mock": bool(last_good.get("_mock", False)),
+                "path": "last_good_fallback",
+                "reason": "route_error",
+            }
             return last_good
         return {
             "error": f"Analysis failed: {str(e)[:200]}",
@@ -147,6 +162,14 @@ async def get_watchlist_analysis(
         report.setdefault("_debug_timing", {})
         report["_debug_timing"]["route_seconds"] = round(route_elapsed, 3)
         report["_debug_timing"]["request_id"] = request_id
+        report["_debug_timing"]["reliability_summary"] = {
+            "source_status": report.get("source_status", "unknown"),
+            "is_mock": bool(report.get("_mock", False)),
+            "served_last_good": bool(report.get("_served_last_good", False)),
+            "fallback_reason": report.get("_fallback_reason"),
+            "analysis_origin": report.get("_analysis_origin", {}),
+            "asset_count": len(report.get("assets", [])) if isinstance(report.get("assets"), list) else 0,
+        }
     return report
 
 

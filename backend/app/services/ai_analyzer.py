@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -153,13 +153,15 @@ async def generate_watchlist_report(
         effective_model_budget = min(model_budget, remaining_before_model)
 
         start_ai = time.monotonic()
-        report = await _call_anthropic(
+        raw_report = await _call_anthropic(
             symbols,
             pruned_context,
             timeout_seconds=effective_model_budget,
             parse_budget_seconds=parse_budget,
             log_prefix=log_prefix,
         )
+        model_meta = raw_report.pop("_model_meta", {}) if isinstance(raw_report, dict) else {}
+        report = raw_report
         ai_duration = time.monotonic() - start_ai
         total_duration = time.monotonic() - pipeline_start
 
@@ -208,6 +210,13 @@ async def generate_watchlist_report(
     report["symbols_analyzed"] = symbols
     report["from_cache"] = False
     report["source_status"] = "fresh"
+    report["_analysis_origin"] = {
+        "is_mock": bool(report.get("_mock", False)),
+        "path": "fresh_generation",
+    }
+
+    quality = _assess_report_quality(report, data_context)
+    report["_quality_gate"] = quality
 
     if getattr(settings, "AI_DEBUG_TIMING", False):
         report["_debug_timing"] = {
@@ -219,6 +228,7 @@ async def generate_watchlist_report(
             "ai_seconds": round(ai_duration, 3),
             "total_seconds": round(total_duration, 3),
             "symbol_count": len(symbols),
+            "model_meta": model_meta if isinstance(model_meta, dict) else {},
             "budgets": {
                 "total": total_budget,
                 "assembly": assembly_budget,
@@ -238,6 +248,18 @@ async def generate_watchlist_report(
     )
 
     if not bool(report.get("_mock")):
+        if quality.get("reject_as_low_confidence") and isinstance(last_good_cached, dict):
+            logger.warning(
+                "%s replacing low-confidence fresh report with last-good fallback (%s)",
+                log_prefix,
+                quality.get("reason", "unspecified"),
+            )
+            return _decorate_last_good_report(last_good_cached, "fresh_low_confidence")
+
+        if quality.get("reject_as_low_confidence"):
+            report["source_status"] = "fresh_low_confidence"
+            report["_low_confidence"] = True
+
         await cache_client.set(cache_key, report, expire_seconds=_REPORT_CACHE_TTL)
         await cache_client.set(
             last_good_key,
@@ -426,6 +448,27 @@ async def _assemble_data_context(
     stage_metrics["stale_price_count"] = float(stale_price_count)
     stage_metrics["asset_count"] = float(len(assets))
     if assets:
+        coverage_by_symbol: Dict[str, float] = {}
+        covered_timeframes = 0
+        expected_timeframes = len(assets) * len(required_timeframes)
+        for a in assets:
+            technicals = a.get("technicals", {})
+            symbol = str(a.get("symbol", "UNKNOWN"))
+            symbol_covered = 0
+            for tf in required_timeframes:
+                tf_payload = technicals.get(tf, {}) if isinstance(technicals, dict) else {}
+                if isinstance(tf_payload, dict) and any(
+                    tf_payload.get(k) is not None
+                    for k in ("trend_signal", "rsi_14", "ema_9", "ema_21", "sma_50", "sma_200")
+                ):
+                    symbol_covered += 1
+            coverage_by_symbol[symbol] = round(symbol_covered / max(1, len(required_timeframes)), 3)
+            covered_timeframes += symbol_covered
+        stage_metrics["technical_timeframe_coverage_ratio"] = round(
+            covered_timeframes / max(1, expected_timeframes), 3
+        )
+        stage_metrics["technical_coverage_by_symbol"] = coverage_by_symbol
+    if assets:
         coverage_scores = []
         for a in assets:
             cov = a.get("coverage", {})
@@ -544,10 +587,24 @@ async def _call_anthropic(
 ) -> Dict[str, Any]:
     """Send the assembled data to Anthropic and parse the structured response."""
     api_key = getattr(settings, "ANTHROPIC_API_KEY", None)
+    simulated_allowed = bool(getattr(settings, "AI_ALLOW_SIMULATED_FALLBACK", False))
+    model_meta: Dict[str, Any] = {"parse_outcome": "not_attempted", "steps": []}
+
+    def _fallback_or_raise(reason: str, *, is_configuration: bool = False) -> Dict[str, Any]:
+        model_meta["failure_reason"] = reason
+        model_meta["parse_outcome"] = model_meta.get("parse_outcome") or "failed"
+        if simulated_allowed:
+            payload = _generate_mock_report(symbols, data_context, error_reason=reason)
+            payload["_model_meta"] = dict(model_meta)
+            return payload
+        if is_configuration:
+            raise RuntimeError(reason)
+        raise ValueError(reason)
 
     if not api_key or "testkey" in api_key:
-        logger.warning("No valid Anthropic API key. Generating mock AI report.")
-        return _generate_mock_report(symbols, data_context)
+        reason = "No valid Anthropic API key configured"
+        logger.warning("%s. Simulated fallback enabled=%s", reason, simulated_allowed)
+        return _fallback_or_raise(reason, is_configuration=True)
 
     call_deadline = time.monotonic() + max(1.0, timeout_seconds)
 
@@ -562,27 +619,40 @@ async def _call_anthropic(
         if remaining <= 0:
             raise asyncio.TimeoutError(f"No model budget left before step={step_name}")
         client = get_llm_http_client()
-        response = await client.post(
-            _ANTHROPIC_API_URL,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": _MODEL,
-                "max_tokens": max_tokens,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": content}],
-            },
-            timeout=httpx.Timeout(connect=5.0, read=max(1.0, remaining), write=8.0, pool=5.0),
-        )
-        response.raise_for_status()
-        payload = response.json()
-        text = payload.get("content", [{}])[0].get("text", "")
-        if not isinstance(text, str):
-            return ""
-        return text
+        request_payload = {
+            "model": _MODEL,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": content}],
+        }
+        for attempt in range(2):
+            try:
+                response = await client.post(
+                    _ANTHROPIC_API_URL,
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json=request_payload,
+                    timeout=httpx.Timeout(connect=5.0, read=max(1.0, remaining), write=8.0, pool=5.0),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                text = payload.get("content", [{}])[0].get("text", "")
+                model_meta["steps"].append(
+                    {"step": step_name, "attempt": attempt + 1, "status": "ok"}
+                )
+                if not isinstance(text, str):
+                    return ""
+                return text
+            except httpx.ReadTimeout:
+                model_meta["steps"].append(
+                    {"step": step_name, "attempt": attempt + 1, "status": "read_timeout"}
+                )
+                if attempt == 0 and _seconds_remaining(call_deadline) > 3.0:
+                    continue
+                raise
 
     try:
         symbol_count = len(symbols)
@@ -603,12 +673,14 @@ Provide your analysis following the output format specified in your system instr
                 step_name="primary",
             )
 
-            parsed = _parse_ai_json_response(
+            parsed, parse_mode = _parse_ai_json_response_with_mode(
                 text=text,
                 parse_budget_seconds=parse_budget_seconds,
                 log_prefix=log_prefix,
             )
             if parsed is not None:
+                model_meta["parse_outcome"] = parse_mode
+                parsed["_model_meta"] = dict(model_meta)
                 return parsed
 
             logger.warning(
@@ -633,20 +705,19 @@ Provide your analysis following the output format specified in your system instr
                     max_tokens=900,
                     step_name="formatter_retry",
                 )
-                parsed_retry = _parse_ai_json_response(
+                parsed_retry, retry_parse_mode = _parse_ai_json_response_with_mode(
                     text=formatted_text,
                     parse_budget_seconds=min(parse_budget_seconds, 1.0),
                     log_prefix=log_prefix,
                 )
                 if parsed_retry is not None:
                     logger.info("%s formatter retry recovered valid JSON output", log_prefix)
+                    model_meta["parse_outcome"] = f"formatter_retry:{retry_parse_mode}"
+                    parsed_retry["_model_meta"] = dict(model_meta)
                     return parsed_retry
 
-            return _generate_mock_report(
-                symbols,
-                data_context,
-                error_reason="Anthropic returned non-JSON output after formatter retry",
-            )
+            model_meta["parse_outcome"] = "failed"
+            return _fallback_or_raise("Anthropic returned non-JSON output after formatter retry")
 
         # ── Larger watchlists: two-stage per-asset + portfolio synthesis ──────
         assets = data_context.get("assets", [])
@@ -675,7 +746,7 @@ Provide your analysis following the output format specified in your system instr
                     max_tokens=320,
                     step_name=f"asset_{sym}",
                 )
-                parsed = _parse_ai_json_response(
+                parsed, parse_mode = _parse_ai_json_response_with_mode(
                     text=text,
                     parse_budget_seconds=min(parse_budget_seconds, 0.8),
                     log_prefix=f"{log_prefix}[asset={sym}]",
@@ -748,12 +819,13 @@ Follow the output schema described in your system instructions."""
             step_name="portfolio_synthesis",
         )
 
-        parsed = _parse_ai_json_response(
+        parsed, parse_mode = _parse_ai_json_response_with_mode(
             text=text,
             parse_budget_seconds=parse_budget_seconds,
             log_prefix=f"{log_prefix}[portfolio]",
         )
         if parsed is not None:
+            model_meta["parse_outcome"] = parse_mode
             assets_by_symbol = {a.get("symbol"): a for a in mini_summaries if isinstance(a, dict)}
             parsed_assets = parsed.get("assets")
             if isinstance(parsed_assets, list) and parsed_assets:
@@ -768,17 +840,15 @@ Follow the output schema described in your system instructions."""
                             normalized_assets.append(assets_by_symbol[sym])
                 if normalized_assets:
                     parsed["assets"] = normalized_assets
+            parsed["_model_meta"] = dict(model_meta)
             return parsed
 
         logger.warning(
             "%s portfolio synthesis output was not valid JSON. Falling back to mock report.",
             f"{log_prefix}[portfolio]",
         )
-        return _generate_mock_report(
-            symbols,
-            data_context,
-            error_reason="Portfolio synthesis returned non-JSON output",
-        )
+        model_meta["parse_outcome"] = "failed"
+        return _fallback_or_raise("Portfolio synthesis returned non-JSON output")
 
     except httpx.ReadTimeout as e:
         # Treat read timeouts as a hard pipeline timeout so the outer route-level
@@ -804,7 +874,7 @@ Follow the output schema described in your system instructions."""
         reason = f"Anthropic API Error {e.response.status_code if e.response else 'unknown'}"
         if body_preview:
             reason = f"{reason}: {body_preview[:120]}"
-        return _generate_mock_report(symbols, data_context, error_reason=reason)
+        return _fallback_or_raise(reason)
     except Exception as e:
         sanitized = _sanitize_error_message(str(e))
         if not sanitized:
@@ -816,11 +886,7 @@ Follow the output schema described in your system instructions."""
             sanitized or "no_message",
         )
         detail = sanitized or "no_message"
-        return _generate_mock_report(
-            symbols,
-            data_context,
-            error_reason=f"Network/Internal Error ({type(e).__name__}): {detail}",
-        )
+        return _fallback_or_raise(f"Network/Internal Error ({type(e).__name__}): {detail}")
 
 
 def _seconds_remaining(deadline: float) -> float:
@@ -832,6 +898,19 @@ def _parse_ai_json_response(
     parse_budget_seconds: float,
     log_prefix: str,
 ) -> Optional[Dict[str, Any]]:
+    parsed, _ = _parse_ai_json_response_with_mode(
+        text=text,
+        parse_budget_seconds=parse_budget_seconds,
+        log_prefix=log_prefix,
+    )
+    return parsed
+
+
+def _parse_ai_json_response_with_mode(
+    text: str,
+    parse_budget_seconds: float,
+    log_prefix: str,
+) -> Tuple[Optional[Dict[str, Any]], str]:
     parse_deadline = time.monotonic() + max(0.1, parse_budget_seconds)
 
     def _try_load(payload: str) -> Optional[Dict[str, Any]]:
@@ -848,9 +927,9 @@ def _parse_ai_json_response(
     # Attempt 1: direct parse
     direct = _try_load(text)
     if direct is not None:
-        return direct
+        return direct, "direct"
     if _seconds_remaining(parse_deadline) <= 0:
-        return None
+        return None, "budget_exhausted"
 
     # Attempt 2: markdown fenced JSON
     import re
@@ -859,9 +938,9 @@ def _parse_ai_json_response(
     if fenced:
         parsed_fenced = _try_load(fenced.group(1))
         if parsed_fenced is not None:
-            return parsed_fenced
+            return parsed_fenced, "fenced"
     if _seconds_remaining(parse_deadline) <= 0:
-        return None
+        return None, "budget_exhausted"
 
     # Attempt 3: bracket window extraction
     start_idx = text.find("{")
@@ -870,7 +949,7 @@ def _parse_ai_json_response(
         window = text[start_idx : end_idx + 1]
         parsed_window = _try_load(window)
         if parsed_window is not None:
-            return parsed_window
+            return parsed_window, "window"
 
         # Attempt 4: deterministic normalization for common model artifacts
         normalized = (
@@ -887,9 +966,9 @@ def _parse_ai_json_response(
         parsed_normalized = _try_load(normalized)
         if parsed_normalized is not None:
             logger.info("%s recovered non-JSON AI output via normalization", log_prefix)
-            return parsed_normalized
+            return parsed_normalized, "normalized"
 
-    return None
+    return None, "failed"
 
 
 def _sanitize_url_for_logs(url: str) -> str:
@@ -987,6 +1066,12 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
         "overall_insight": insight_text,
         "_mock": True,
         "mock_reason": error_reason or "Missing or invalid ANTHROPIC_API_KEY; using local fallback synthesis.",
+        "source_status": "mock_fallback",
+        "_analysis_origin": {
+            "is_mock": True,
+            "path": "mock_fallback",
+            "reason": error_reason or "missing_or_invalid_api_key",
+        },
     }
 
 
@@ -1014,7 +1099,69 @@ def _decorate_last_good_report(report: Dict[str, Any], reason: str) -> Dict[str,
     safe["source_status"] = "last_good_fallback"
     safe["_served_last_good"] = True
     safe["_fallback_reason"] = reason
+    safe["_analysis_origin"] = {
+        "is_mock": bool(safe.get("_mock", False)),
+        "path": "last_good_fallback",
+        "reason": reason,
+        "generated_at": safe.get("generated_at"),
+    }
     return safe
+
+
+def _assess_report_quality(report: Dict[str, Any], data_context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Detect obvious low-confidence outputs so they do not replace stronger last-good reports.
+    We intentionally keep this conservative to avoid suppressing legitimate neutral analysis.
+    """
+    assets = report.get("assets")
+    if not isinstance(assets, list) or not assets:
+        return {"reject_as_low_confidence": False, "reason": "no_assets"}
+
+    verdicts = [
+        str(a.get("verdict", "")).upper()
+        for a in assets
+        if isinstance(a, dict)
+    ]
+    all_neutral = bool(verdicts) and all(v == "NEUTRAL" for v in verdicts)
+
+    context_assets = data_context.get("assets", [])
+    technical_ready_count = 0
+    for c_asset in context_assets if isinstance(context_assets, list) else []:
+        if not isinstance(c_asset, dict):
+            continue
+        technicals = c_asset.get("technicals", {})
+        if not isinstance(technicals, dict):
+            continue
+        has_any_core = False
+        for tf in ("1h", "1d", "1w", "1m"):
+            tf_payload = technicals.get(tf, {})
+            if not isinstance(tf_payload, dict):
+                continue
+            if any(
+                tf_payload.get(k) is not None
+                for k in ("rsi_14", "trend_signal", "ema_9", "ema_21", "sma_50", "sma_200")
+            ):
+                has_any_core = True
+                break
+        if has_any_core:
+            technical_ready_count += 1
+
+    total_assets = len(assets)
+    technical_coverage_ratio = technical_ready_count / max(1, total_assets)
+    insight = str(report.get("overall_insight", "")).lower()
+    missing_data_phrase = (
+        "without robust technical" in insight
+        or "absence of" in insight
+        or "missing hourly" in insight
+    )
+
+    reject = all_neutral and technical_coverage_ratio >= 0.8 and missing_data_phrase
+    return {
+        "reject_as_low_confidence": reject,
+        "reason": "all_neutral_with_missing_data_claim" if reject else "accepted",
+        "all_neutral": all_neutral,
+        "technical_coverage_ratio": round(technical_coverage_ratio, 3),
+    }
 
 
 def _safe_text(value: Any, default: str) -> str:
