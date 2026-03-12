@@ -260,7 +260,13 @@ Return a valid JSON object with this EXACT structure:
   "overall_insight": "2-3 sentence portfolio-level takeaway"
 }
 
-IMPORTANT: Return ONLY the JSON object. No markdown, no code fences, no explanation outside the JSON."""
+IMPORTANT: Return ONLY the JSON object. 
+- DO NOT include markdown code fences (```json).
+- DO NOT include any conversational preamble (e.g., "Certainly," or "Here is...").
+- DO NOT include any post-analysis commentary.
+- Your entire response MUST start with '{' and end with '}'.
+- Ensure the JSON is valid and strictly follows the schema above.
+"""
 
 
 async def _call_anthropic(
