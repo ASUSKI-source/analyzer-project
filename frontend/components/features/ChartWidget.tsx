@@ -4,18 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { createChart, ColorType, IChartApi, ISeriesApi, Time, CandlestickSeries, HistogramSeries } from "lightweight-charts";
 import { fetchAssetHistory } from "@/services/api_client";
 import { TrendingUp, RefreshCw } from "lucide-react";
+import { useLivePrice } from "./LivePriceProvider";
 
 export function ChartWidget({ 
   symbol = "AAPL", 
-  realtimePrice, 
   days = 365,
   refreshKey = 0 
 }: { 
   symbol?: string; 
-  realtimePrice?: number; 
   days?: number;
   refreshKey?: number;
 }) {
+  const livePrice = useLivePrice(symbol);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -27,13 +27,8 @@ export function ChartWidget({
 
   // Handle Real-time point updates
   useEffect(() => {
-    if (seriesRef.current && realtimePrice && !loading) {
-      const now = new Date();
-      const timeStr = now.toISOString().split('T')[0];
-      
+    if (seriesRef.current && livePrice && !loading) {
       // Update the last candle
-      // In a real app we'd fetch the exact candle, but for auto-refreshing 
-      // the UX, we update the 'close' of the latest day.
       const lastBar = (seriesRef.current as any).data && (seriesRef.current as any).data.length > 0 
         ? (seriesRef.current as any).data[(seriesRef.current as any).data.length - 1] 
         : null;
@@ -41,13 +36,13 @@ export function ChartWidget({
       if (lastBar) {
         seriesRef.current.update({
           ...lastBar,
-          close: realtimePrice,
-          high: Math.max(lastBar.high, realtimePrice),
-          low: Math.min(lastBar.low, realtimePrice),
+          close: livePrice,
+          high: Math.max(lastBar.high, livePrice),
+          low: Math.min(lastBar.low, livePrice),
         });
       }
     }
-  }, [realtimePrice, loading]);
+  }, [livePrice, loading]);
 
   useEffect(() => {
     // ... Initialize Chart code ...

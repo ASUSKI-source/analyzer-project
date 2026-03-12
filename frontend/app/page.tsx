@@ -181,15 +181,11 @@ export default function Home() {
             </div>
             {/* Live Chart Canvas */}
             <div className="flex-1 rounded-xl bg-black/20 border border-white/5 flex items-center justify-center shadow-inner relative overflow-hidden group-hover/chart:border-white/10 transition-colors p-2">
-               <ChartWidget 
-                 symbol={selectedAsset} 
-                 days={chartDays}
-                 refreshKey={chartRefreshKey}
-                 realtimePrice={
-                   data?.market_overview?.find(m => m.symbol === selectedAsset)?.price || 
-                   customPrices.find(p => p.symbol === selectedAsset)?.price
-                 } 
-               />
+                <ChartWidget 
+                  symbol={selectedAsset} 
+                  days={chartDays}
+                  refreshKey={chartRefreshKey}
+                />
             </div>
           </div>
 

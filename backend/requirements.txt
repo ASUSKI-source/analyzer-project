@@ -21,3 +21,5 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 yfinance>=0.2.36
+polygon-api-client==1.13.7
+websockets==12.0

@@ -5,6 +5,7 @@ from app.core.handlers import app_exception_handler, general_exception_handler
 from app.core.errors import AppException
 from app.api.router import api_router
 from app.core.config import settings
+from app.services.stream import streamer
 
 # Configure basic logging for the entire app to catch errors clearly
 logging.basicConfig(level=logging.INFO)
@@ -55,8 +56,12 @@ async def startup_event():
         logger.error(f"Failed to connect to database at startup: {e}")
         logger.warning("Backend is running in 'Degraded Mode' (no database features).")
 
+    # Start the Polygon Real-time Streamer
+    await streamer.start()
+
 @app.on_event("shutdown")
 async def shutdown_event():
+    await streamer.stop()
     await cache_client.close()
 
 @app.get("/")
