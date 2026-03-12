@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2 } from "lucide-react";
 import { ChartWidget } from "@/components/features/ChartWidget";
-import { SparklineWidget } from "@/components/features/SparklineWidget";
 import { useDashboardPulse, MarketQuote } from "@/hooks/useDashboardPulse";
 import { useAuth } from "@/contexts/AuthContext";
 import { LandingAuth } from "@/components/auth/LandingAuth";
@@ -274,11 +273,6 @@ function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelec
     >
       <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-full group-hover:translate-x-full duration-1000 ease-in-out z-0" />
       
-      {/* Dynamic Mini-Chart Sparkline */}
-      <div className="absolute inset-x-0 bottom-0 top-6 opacity-30 group-hover:opacity-60 transition-opacity z-0 pointer-events-none px-2 pb-2">
-        <SparklineWidget symbol={title} isPositive={isPositive} />
-      </div>
-
       <div className="relative z-10 pointer-events-none">
         <p className="text-xs text-steel tracking-wider mb-2 font-mono uppercase">{title}</p>
         <p className={`text-xl font-bold mb-1 transition-all duration-300 ${isFlashActive ? 'text-blue-400 scale-[1.02]' : 'text-marble'}`}>
@@ -358,11 +352,6 @@ function WatchlistItem({ symbol, name, price, change, isPositive, rawPrice, onCl
           )}
         </div>
         {name && <span className="text-xs text-steel truncate max-w-[120px]">{name}</span>}
-      </div>
-
-      {/* Dynamic Mini-Chart Sparkline */}
-      <div className="absolute top-1 bottom-1 left-[40%] right-1/4 opacity-40 group-hover:opacity-100 px-2 pointer-events-none">
-         <SparklineWidget symbol={symbol} isPositive={isPositive} />
       </div>
 
       <div className="flex flex-col items-end gap-1 z-10 w-1/4 text-right">

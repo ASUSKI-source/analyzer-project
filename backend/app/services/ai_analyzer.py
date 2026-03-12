@@ -480,14 +480,6 @@ async def _call_anthropic(
         logger.warning("No valid Anthropic API key. Generating mock AI report.")
         return _generate_mock_report(symbols, data_context)
 
-    # Build the user message with all the data
-    user_message = f"""Analyze the following watchlist as of {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}.
-
-## Watchlist Data Context
-{json.dumps(data_context, indent=2, default=str)}
-
-Provide your analysis following the output format specified in your system instructions."""
-
     call_deadline = time.monotonic() + max(1.0, timeout_seconds)
 
     async def _post_messages(
@@ -524,56 +516,199 @@ Provide your analysis following the output format specified in your system instr
         return text
 
     try:
+        symbol_count = len(symbols)
+
+        # ── Small watchlists (<=2): use existing single-stage flow ────────────
+        if symbol_count <= 2:
+            user_message = f"""Analyze the following watchlist as of {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}.
+
+## Watchlist Data Context
+{json.dumps(data_context, indent=2, default=str)}
+
+Provide your analysis following the output format specified in your system instructions."""
+
+            text = await _post_messages(
+                system_prompt=_MASTER_PROMPT,
+                content=user_message,
+                max_tokens=1200,
+                step_name="primary",
+            )
+
+            parsed = _parse_ai_json_response(
+                text=text,
+                parse_budget_seconds=parse_budget_seconds,
+                log_prefix=log_prefix,
+            )
+            if parsed is not None:
+                return parsed
+
+            logger.warning(
+                "%s primary model output was not valid JSON. len=%s first_200=%s",
+                log_prefix,
+                len(text),
+                text[:200],
+            )
+
+            # Formatter retry: convert narrative output into strict JSON schema.
+            remaining = _seconds_remaining(call_deadline)
+            if remaining > 1.0:
+                formatter_prompt = (
+                    "Convert the following analysis text into VALID JSON using this schema keys only: "
+                    "market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, assets, overall_insight. "
+                    "For each asset include: symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
+                    "Return JSON only, no markdown, no prose."
+                )
+                formatted_text = await _post_messages(
+                    system_prompt="You are a strict JSON formatter.",
+                    content=f"{formatter_prompt}\n\nANALYSIS_TEXT:\n{text}",
+                    max_tokens=900,
+                    step_name="formatter_retry",
+                )
+                parsed_retry = _parse_ai_json_response(
+                    text=formatted_text,
+                    parse_budget_seconds=min(parse_budget_seconds, 1.0),
+                    log_prefix=log_prefix,
+                )
+                if parsed_retry is not None:
+                    logger.info("%s formatter retry recovered valid JSON output", log_prefix)
+                    return parsed_retry
+
+            return _generate_mock_report(
+                symbols,
+                data_context,
+                error_reason="Anthropic returned non-JSON output after formatter retry",
+            )
+
+        # ── Larger watchlists: two-stage per-asset + portfolio synthesis ──────
+        assets = data_context.get("assets", [])
+
+        async def _per_asset_summary(asset: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            sym = asset.get("symbol", "UNKNOWN")
+            core_payload = {
+                "symbol": sym,
+                "price": asset.get("price"),
+                "change_percent": asset.get("change_percent"),
+                "technicals": asset.get("technicals", {}),
+                "fundamentals": asset.get("fundamentals", {}),
+            }
+            mini_prompt = (
+                "Given the following single-asset snapshot (price, 1h/1d/1w technicals, and fundamentals), "
+                "return a compact JSON object ONLY with these keys: "
+                "symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
+                "Do not include any other keys or wrapper objects. JSON only, no markdown, no prose."
+            )
+            content = f"{mini_prompt}\n\nASSET_SNAPSHOT:\n{json.dumps(core_payload, indent=2, default=str)}"
+
+            try:
+                text = await _post_messages(
+                    system_prompt="You are a concise, strictly-JSON-generating single-asset analyst.",
+                    content=content,
+                    max_tokens=320,
+                    step_name=f"asset_{sym}",
+                )
+                parsed = _parse_ai_json_response(
+                    text=text,
+                    parse_budget_seconds=min(parse_budget_seconds, 0.8),
+                    log_prefix=f"{log_prefix}[asset={sym}]",
+                )
+                if parsed is None:
+                    return None
+                parsed["symbol"] = parsed.get("symbol") or sym
+                return parsed
+            except Exception as e:
+                logger.warning(
+                    "%s per-asset summary failed for %s: %s",
+                    log_prefix,
+                    sym,
+                    _sanitize_error_message(str(e)),
+                )
+                return None
+
+        per_asset_tasks = [_per_asset_summary(a) for a in assets]
+        per_asset_results = await asyncio.gather(*per_asset_tasks, return_exceptions=True)
+
+        mini_summaries: List[Dict[str, Any]] = []
+        for asset, result in zip(assets, per_asset_results):
+            if isinstance(result, Exception) or result is None:
+                mini_summaries.append(
+                    {
+                        "symbol": asset.get("symbol", "UNKNOWN"),
+                        "verdict": "NEUTRAL",
+                        "timeframe_signals": {
+                            "tactical_1h": asset.get("technicals", {}).get("1h", {}).get("trend_signal", "Neutral"),
+                            "trend_1d": asset.get("technicals", {}).get("1d", {}).get("trend_signal", "Neutral"),
+                            "strategic_1w": asset.get("technicals", {}).get("1w", {}).get("trend_signal", "Neutral"),
+                        },
+                        "key_metrics": {
+                            "rsi_daily": asset.get("technicals", {}).get("1d", {}).get("rsi_14"),
+                            "pe_ratio": asset.get("fundamentals", {}).get("pe_ratio"),
+                            "macd_signal": asset.get("technicals", {}).get("1d", {}).get("trend_signal", "Neutral"),
+                        },
+                        "analysis_bullets": [
+                            "AI mini-summary unavailable; using raw trend and fundamental hints instead."
+                        ],
+                        "catalyst": "No specific catalyst identified.",
+                        "action_note": "Use this asset as part of the broader portfolio context.",
+                    }
+                )
+            else:
+                mini_summaries.append(result)
+
+        remaining = _seconds_remaining(call_deadline)
+        if remaining <= 0:
+            raise asyncio.TimeoutError("No model budget left before portfolio synthesis")
+
+        portfolio_prompt = (
+            "You are a portfolio-level analyst. You are given a list of per-asset mini summaries that already contain "
+            "verdicts, timeframe_signals, and key_metrics. Using ONLY these summaries, produce a SINGLE JSON object "
+            "matching the schema: market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, "
+            "assets, overall_insight. For each asset in 'assets', you may reuse or refine the provided fields, but do "
+            "not invent symbols that are not present. JSON only, no markdown, no prose."
+        )
+        user_message = f"""As of {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}, analyze this portfolio based on mini summaries:
+
+PER_ASSET_MINI_SUMMARIES:
+{json.dumps(mini_summaries, indent=2, default=str)}
+
+Follow the output schema described in your system instructions."""
+
         text = await _post_messages(
             system_prompt=_MASTER_PROMPT,
             content=user_message,
-            max_tokens=1200,
-            step_name="primary",
+            max_tokens=900,
+            step_name="portfolio_synthesis",
         )
 
         parsed = _parse_ai_json_response(
             text=text,
             parse_budget_seconds=parse_budget_seconds,
-            log_prefix=log_prefix,
+            log_prefix=f"{log_prefix}[portfolio]",
         )
         if parsed is not None:
+            assets_by_symbol = {a.get("symbol"): a for a in mini_summaries if isinstance(a, dict)}
+            parsed_assets = parsed.get("assets")
+            if isinstance(parsed_assets, list) and parsed_assets:
+                normalized_assets: List[Dict[str, Any]] = []
+                for sym in symbols:
+                    for pa in parsed_assets:
+                        if isinstance(pa, dict) and (pa.get("symbol") or "").upper() == sym.upper():
+                            normalized_assets.append(pa)
+                            break
+                    else:
+                        if sym in assets_by_symbol:
+                            normalized_assets.append(assets_by_symbol[sym])
+                if normalized_assets:
+                    parsed["assets"] = normalized_assets
             return parsed
 
         logger.warning(
-            "%s primary model output was not valid JSON. len=%s first_200=%s",
-            log_prefix,
-            len(text),
-            text[:200],
+            "%s portfolio synthesis output was not valid JSON. Falling back to mock report.",
+            f"{log_prefix}[portfolio]",
         )
-
-        # Formatter retry: convert narrative output into strict JSON schema.
-        remaining = _seconds_remaining(call_deadline)
-        if remaining > 1.0:
-            formatter_prompt = (
-                "Convert the following analysis text into VALID JSON using this schema keys only: "
-                "market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, assets, overall_insight. "
-                "For each asset include: symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
-                "Return JSON only, no markdown, no prose."
-            )
-            formatted_text = await _post_messages(
-                system_prompt="You are a strict JSON formatter.",
-                content=f"{formatter_prompt}\n\nANALYSIS_TEXT:\n{text}",
-                max_tokens=900,
-                step_name="formatter_retry",
-            )
-            parsed_retry = _parse_ai_json_response(
-                text=formatted_text,
-                parse_budget_seconds=min(parse_budget_seconds, 1.0),
-                log_prefix=log_prefix,
-            )
-            if parsed_retry is not None:
-                logger.info("%s formatter retry recovered valid JSON output", log_prefix)
-                return parsed_retry
-
         return _generate_mock_report(
             symbols,
             data_context,
-            error_reason="Anthropic returned non-JSON output after formatter retry",
+            error_reason="Portfolio synthesis returned non-JSON output",
         )
 
     except httpx.ReadTimeout as e:
