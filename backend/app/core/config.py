@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # Enable extra timing/debug metadata in AI responses (non-prod debugging).
     AI_DEBUG_TIMING: bool = False
     AI_DEBUG_VERBOSE_LOGS: bool = False
+    # Reliability-first default: exclude news sentiment from AI prompt/context unless explicitly enabled.
+    AI_INCLUDE_NEWS_SENTIMENT: bool = False
 
     # Timeout budgets for AI report generation pipeline.
     AI_TOTAL_BUDGET_SECONDS: float = 24.0

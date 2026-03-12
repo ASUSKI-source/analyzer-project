@@ -165,6 +165,7 @@ async def generate_watchlist_report(
             "cache_gate_seconds": round(cache_gate_seconds, 3),
             "assembly_seconds": round(assembly_duration, 3),
             "assembly_metrics": assembly_metrics,
+            "news_sentiment_included": bool(assembly_metrics.get("news_included", False)),
             "ai_seconds": round(ai_duration, 3),
             "total_seconds": round(total_duration, 3),
             "symbol_count": len(symbols),
@@ -191,7 +192,7 @@ async def _assemble_data_context(
     db: Any,
     budget_seconds: float,
     log_prefix: str = "[ai_report]",
-) -> tuple[Dict[str, Any], Dict[str, float]]:
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Gathers data from three tiers concurrently using batch methods.
       Tier 1: Live prices (DataBroker, 10s cache)
@@ -203,9 +204,11 @@ async def _assemble_data_context(
     """
     from app.services.providers.broker import get_broker
     from app.services.indicators import get_batch_indicators
-    from app.services.finnhub import get_batch_fundamentals, get_batch_news_sentiment
+    from app.services.finnhub import get_batch_fundamentals
 
-    stage_metrics: Dict[str, float] = {}
+    stage_metrics: Dict[str, Any] = {}
+    include_news = bool(getattr(settings, "AI_INCLUDE_NEWS_SENTIMENT", False))
+    stage_metrics["news_included"] = include_news
 
     async def _timed_step(name: str, coroutine: Any) -> Any:
         started = time.monotonic()
@@ -223,12 +226,19 @@ async def _assemble_data_context(
             )
             return e
 
+    news_coro: Any
+    if include_news:
+        from app.services.finnhub import get_batch_news_sentiment
+        news_coro = get_batch_news_sentiment(symbols)
+    else:
+        news_coro = _empty_news_batch(symbols)
+
     # 1. Start all batch tasks
     wrapped_tasks = [
         _timed_step("quotes", get_broker().fetch_quotes(symbols)),
         _timed_step("indicators", get_batch_indicators(symbols, ["1h", "1d", "1w"], db)),
         _timed_step("fundamentals", get_batch_fundamentals(symbols)),
-        _timed_step("news", get_batch_news_sentiment(symbols)),
+        _timed_step("news", news_coro),
     ]
 
     # 2. Execute with strict assembly budget
@@ -292,7 +302,7 @@ async def _assemble_data_context(
     stage_metrics["asset_count"] = float(len(assets))
     logger.info(
         f"{log_prefix} assembly summary assets={len(assets)} resolved_prices={len(price_map)} "
-        f"stale_prices={stale_price_count}"
+        f"stale_prices={stale_price_count} news_included={include_news}"
     )
 
     return {"assets": assets, "timestamp": datetime.now(timezone.utc).isoformat()}, stage_metrics
@@ -312,18 +322,26 @@ async def _get_cached_fundamentals(symbol: str) -> Dict[str, Any]:
     return result
 
 
+async def _empty_news_batch(symbols: List[str]) -> List[Dict[str, Any]]:
+    """
+    Returns placeholder news payloads to preserve context shape when news sentiment
+    is intentionally disabled for latency/reliability.
+    """
+    return [{} for _ in symbols]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANTHROPIC INTEGRATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _MASTER_PROMPT = """You are the ultimate Hybrid Financial Analyst: a neutral, data-driven strategist with an "institutional investigator" rigor and a down-to-earth, plain-English communication style.
 
-Your mission is to bridge the gap between complex institutional data and actionable, human-readable insights. You don't just report numbers; you connect dots between technical signals, fundamental health, and the broader "market pulse."
+Your mission is to bridge the gap between complex market data and actionable, human-readable insights. You don't just report numbers; you connect dots between technical signals and fundamental health across multiple horizons.
 
 ## Core Focus Areas:
-1. **Institutional Activity & Sentiment:** Look for clues in the news and price action that suggest institutional positioning.
-2. **Multi-Horizon Technicals:** Match RSI/MACD with SMA_50/200 for structural trend and EMA_9/21 for high-velocity momentum.
-3. **Macro/Fundamental Hybrid:** Balance technical breakouts with valuation (P/E, EPS) and catalysts.
+1. **Multi-Horizon Technicals:** Match RSI/MACD with SMA/EMA structure for tactical and strategic trend quality.
+2. **Fundamental Health:** Use valuation/profitability metrics (P/E, EPS, etc.) as context for quality and risk.
+3. **Technical-Fundamental Synthesis:** Balance momentum/trend behavior with business quality and valuation signals.
 
 ## Your Analysis Guidelines
 - **Be direct and honest:** No fluff, no hype. If the data looks weak, say so plainly.
@@ -333,7 +351,7 @@ Your mission is to bridge the gap between complex institutional data and actiona
   - *Trend (1d):* The medium-term directional flow and SMA_50 support.
   - *Strategic (1w):* High-timeframe structural health and major cycles.
 - **Highlight Conflicts:** If an asset is bullish on the Weekly but overextended on the 1h, flag it as a "Tactical Caution."
-- **Institutional Context:** Connect technical multi-timeframe signals to fundamental valuation and macro catalysts.
+- **No external news dependence required:** Base conclusions on provided technical/fundamental fields even when news sentiment is missing.
 
 ## Output Format
 Return a valid JSON object with this EXACT structure:
