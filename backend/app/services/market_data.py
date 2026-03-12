@@ -246,27 +246,39 @@ async def get_asset_history(
         # Calculate date boundary
         start_date = datetime.now(timezone.utc) - timedelta(days=days)
         
-        # Fetch candles securely using parameterized queries
+        # Fetch candles using only columns that exist in both legacy and new schemas.
         candles_result = await db.execute(
-            select(AssetCandle)
+            select(
+                AssetCandle.timestamp,
+                AssetCandle.open,
+                AssetCandle.high,
+                AssetCandle.low,
+                AssetCandle.close,
+                AssetCandle.volume,
+            )
             .where(AssetCandle.asset_id == asset.id)
             .where(AssetCandle.timestamp >= start_date)
-            .where(AssetCandle.timeframe == timeframe)
             .order_by(AssetCandle.timestamp.asc())
         )
-        db_candles = candles_result.scalars().all()
+        db_candles = candles_result.all()
 
         # If requested window has no rows, fall back to latest persisted candles
         # so we prefer real but stale data over synthetic generation.
         if not db_candles:
             stale_result = await db.execute(
-                select(AssetCandle)
+                select(
+                    AssetCandle.timestamp,
+                    AssetCandle.open,
+                    AssetCandle.high,
+                    AssetCandle.low,
+                    AssetCandle.close,
+                    AssetCandle.volume,
+                )
                 .where(AssetCandle.asset_id == asset.id)
-                .where(AssetCandle.timeframe == timeframe)
                 .order_by(AssetCandle.timestamp.desc())
                 .limit(min(max(days, 30), 365))
             )
-            stale_db_candles = list(reversed(stale_result.scalars().all()))
+            stale_db_candles = list(reversed(stale_result.all()))
     
     chart_data = []
     
@@ -275,21 +287,21 @@ async def get_asset_history(
     selected_candles = db_candles if db_candles else stale_db_candles
     meta = {"source": "unknown", "as_of": None, "staleness_seconds": None, "is_stale": None}
     if selected_candles:
-        for c in selected_candles:
+        for ts, open_, high_, low_, close_, volume_ in selected_candles:
             chart_data.append({
-                "time": c.timestamp.strftime("%Y-%m-%d"),
-                "open": c.open,
-                "high": c.high,
-                "low": c.low,
-                "close": c.close,
-                "value": c.volume
+                "time": ts.strftime("%Y-%m-%d"),
+                "open": open_,
+                "high": high_,
+                "low": low_,
+                "close": close_,
+                "value": volume_,
             })
-        latest_candle = selected_candles[-1]
-        staleness_seconds = max(0, int((datetime.now(timezone.utc) - latest_candle.timestamp).total_seconds()))
+        latest_ts = selected_candles[-1][0]
+        staleness_seconds = max(0, int((datetime.now(timezone.utc) - latest_ts).total_seconds()))
         strict_threshold = 900 if days <= 2 else 86400
         meta = {
             "source": "db_recent" if db_candles else "db_last_known_good",
-            "as_of": latest_candle.timestamp.isoformat(),
+            "as_of": latest_ts.isoformat(),
             "staleness_seconds": staleness_seconds,
             "is_stale": staleness_seconds > strict_threshold,
         }

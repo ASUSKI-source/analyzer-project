@@ -62,25 +62,36 @@ async def get_cached_indicators(
             
             if asset_id:
                 since = datetime.now() - timedelta(days=days)
-                cq = select(AssetCandle).where(
+                cq = select(
+                    AssetCandle.timestamp,
+                    AssetCandle.open,
+                    AssetCandle.high,
+                    AssetCandle.low,
+                    AssetCandle.close,
+                    AssetCandle.volume,
+                ).where(
                     and_(
-                        AssetCandle.asset_id == asset_id, 
+                        AssetCandle.asset_id == asset_id,
                         AssetCandle.timestamp >= since,
-                        AssetCandle.timeframe == timeframe
                     )
                 ).order_by(AssetCandle.timestamp.asc())
-                
+
                 cres = await db.execute(cq)
-                db_candles = cres.scalars().all()
-                
-                if len(db_candles) >= 40: # Need enough for SMA 200 checks eventually
-                    candles = [
-                        {
-                            "time": c.timestamp.isoformat(),
-                            "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume
-                        }
-                        for c in db_candles
-                    ]
+                db_rows = cres.all()
+
+                if len(db_rows) >= 40:  # Need enough for SMA 200 checks eventually
+                    candles = []
+                    for ts, open_, high_, low_, close_, volume_ in db_rows:
+                        candles.append(
+                            {
+                                "time": ts.isoformat(),
+                                "open": open_,
+                                "high": high_,
+                                "low": low_,
+                                "close": close_,
+                                "volume": volume_,
+                            }
+                        )
                     logger.info(f"Using DB-backed candles for {symbol} ({timeframe}) - {len(candles)} points")
                     
                     # 4. WEEKLY RESAMPLING (Strategic Horizon)
