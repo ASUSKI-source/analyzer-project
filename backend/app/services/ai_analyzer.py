@@ -309,16 +309,29 @@ Provide your analysis following the output format specified in your system instr
 
         # Parse JSON from the response
         try:
-            report = json.loads(text)
-            return report
+            # Attempt 1: Standard load
+            return json.loads(text)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown code fences
+            # Attempt 2: Extract from markdown code fences
             import re
-            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+            json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
             if json_match:
-                report = json.loads(json_match.group(1))
-                return report
-            logger.error(f"Failed to parse AI response as JSON: {text[:200]}")
+                try:
+                    return json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+            
+            # Attempt 3: Heuristic — Find the first '{' and last '}'
+            try:
+                start_idx = text.find('{')
+                end_idx = text.rfind('}')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    possible_json = text[start_idx:end_idx + 1]
+                    return json.loads(possible_json)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+            logger.error(f"Failed to parse AI response as JSON. Raw length: {len(text)}. First 100 chars: {text[:100]}")
             return {"error": "AI returned non-JSON response", "raw_text": text[:500]}
 
     except httpx.HTTPStatusError as e:
