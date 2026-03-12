@@ -8,6 +8,9 @@ class MarketQuote(BaseModel):
     symbol: str
     price: float = Field(..., description="Current asset price")
     changePercent: float = Field(..., description="Percent change over 24 hours")
+    as_of: Optional[str] = Field(default=None, description="ISO timestamp for quote freshness")
+    is_stale: Optional[bool] = Field(default=None, description="Whether this quote is stale")
+    source: Optional[str] = Field(default=None, description="Data source or fallback layer")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -27,6 +30,10 @@ class DashboardPulseResponse(BaseModel):
     """
     market_overview: List[MarketQuote]
     sentiment: NewsSentiment
+    generated_at: Optional[str] = None
+    served_at: Optional[str] = None
+    staleness_seconds: Optional[int] = None
+    is_stale: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +57,10 @@ class AssetHistoryResponse(BaseModel):
     status: str
     symbol: str
     data: List[HistoryDataPoint]
+    source: Optional[str] = None
+    as_of: Optional[str] = None
+    staleness_seconds: Optional[int] = None
+    is_stale: Optional[bool] = None
 
 class TechnicalIndicators(BaseModel):
     """

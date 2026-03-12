@@ -184,7 +184,8 @@ async def get_asset_history(
     days: int = 365, 
     current_price: Optional[float] = None,
     refresh: bool = False,
-    timeframe: str = "1d"
+    timeframe: str = "1d",
+    return_meta: bool = False,
 ):
     """
     Retrieves historical candlestick data for a given asset from our TimescaleDB.
@@ -224,6 +225,15 @@ async def get_asset_history(
     # 1. Provide Real-time Intraday accuracy for lower timeframe selections
     live_intraday = await get_live_intraday_history(symbol, days)
     if live_intraday and len(live_intraday) > 0:
+        if return_meta:
+            latest_ts = live_intraday[-1]["time"] if live_intraday else None
+            as_of = datetime.fromtimestamp(latest_ts, tz=timezone.utc).isoformat() if isinstance(latest_ts, int) else None
+            return live_intraday, {
+                "source": "live_intraday",
+                "as_of": as_of,
+                "staleness_seconds": 0,
+                "is_stale": False,
+            }
         return live_intraday
         
     # Validate the asset exists
@@ -231,6 +241,7 @@ async def get_asset_history(
     asset = result.scalars().first()
     
     db_candles = []
+    stale_db_candles = []
     if asset:
         # Calculate date boundary
         start_date = datetime.now(timezone.utc) - timedelta(days=days)
@@ -244,13 +255,27 @@ async def get_asset_history(
             .order_by(AssetCandle.timestamp.asc())
         )
         db_candles = candles_result.scalars().all()
+
+        # If requested window has no rows, fall back to latest persisted candles
+        # so we prefer real but stale data over synthetic generation.
+        if not db_candles:
+            stale_result = await db.execute(
+                select(AssetCandle)
+                .where(AssetCandle.asset_id == asset.id)
+                .where(AssetCandle.timeframe == timeframe)
+                .order_by(AssetCandle.timestamp.desc())
+                .limit(min(max(days, 30), 365))
+            )
+            stale_db_candles = list(reversed(stale_result.scalars().all()))
     
     chart_data = []
     
     # Map cleanly to Lightweight Charts expected format: 
     # { time: 'YYYY-MM-DD', open, high, low, close, volume }
-    if db_candles:
-        for c in db_candles:
+    selected_candles = db_candles if db_candles else stale_db_candles
+    meta = {"source": "unknown", "as_of": None, "staleness_seconds": None, "is_stale": None}
+    if selected_candles:
+        for c in selected_candles:
             chart_data.append({
                 "time": c.timestamp.strftime("%Y-%m-%d"),
                 "open": c.open,
@@ -259,6 +284,15 @@ async def get_asset_history(
                 "close": c.close,
                 "value": c.volume
             })
+        latest_candle = selected_candles[-1]
+        staleness_seconds = max(0, int((datetime.now(timezone.utc) - latest_candle.timestamp).total_seconds()))
+        strict_threshold = 900 if days <= 2 else 86400
+        meta = {
+            "source": "db_recent" if db_candles else "db_last_known_good",
+            "as_of": latest_candle.timestamp.isoformat(),
+            "staleness_seconds": staleness_seconds,
+            "is_stale": staleness_seconds > strict_threshold,
+        }
     else:
         # Fallback to realistic generated dummy data.
         # CRITICAL: Walk BACKWARD from current_price so the final point matches exactly.
@@ -301,5 +335,13 @@ async def get_asset_history(
         # Reverse to get chronological order [oldest -> newest]
         chart_data = list(temp_data)
         chart_data.reverse()
-            
+        meta = {
+            "source": "synthetic_fallback",
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "staleness_seconds": None,
+            "is_stale": True,
+        }
+
+    if return_meta:
+        return chart_data, meta
     return chart_data

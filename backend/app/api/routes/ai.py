@@ -66,19 +66,21 @@ async def get_watchlist_analysis(
     except asyncio.TimeoutError:
         logger.error(f"AI report generation timed out after {_ENDPOINT_TIMEOUT}s for user {user_id}")
         return {
-            "market_summary": "Analysis timed out. The server was unable to gather all data in time. Try again shortly — cached data will speed up the next attempt.",
+            "market_summary": "Analysis timed out. This often happens if the data provider (Finnhub) is under heavy load or rate-limiting. We are currently optimizing data assembly to be more resilient.",
             "watchlist_health": "MIXED",
             "risk_level": "MODERATE",
             "sector_exposure": f"Attempted analysis of {len(symbol_list)} assets.",
             "assets": [],
-            "overall_insight": "The analysis engine timed out gathering live market data. This usually resolves on a second attempt as data gets cached.",
+            "overall_insight": "The engine timed out gathering live data. Try again in a few moments — cached data from this attempt will make the next one significantly faster.",
             "_timeout": True,
+            "_mock": False,
         }
     except Exception as e:
         logger.error(f"AI report generation crashed: {e}", exc_info=True)
         return {
             "error": f"Analysis failed: {str(e)[:200]}",
             "assets": [],
+            "_mock": False,
         }
 
     return report

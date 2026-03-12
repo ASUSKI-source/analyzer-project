@@ -53,6 +53,18 @@ async def generate_watchlist_report(
     # ── 1. Check Report Cache (Skip if refresh=True) ─────────────────────────
     cache_key = _report_cache_key(user_id, symbols)
     if not refresh:
+        # ── 2. Security: Global 5-minute AI Generation Cooldown ─────────────────
+        cooldown_key = f"ai_generation_cooldown:{user_id}"
+        cooldown_ttl = await cache_client.get_ttl(cooldown_key)
+        if cooldown_ttl > 0:
+            logger.warning(f"AI generation cooldown active for user {user_id} ({cooldown_ttl}s remaining)")
+            return {
+                "error": "Engine cooling down. You can generate a new analysis once every 5 minutes.",
+                "cooldown_remaining": cooldown_ttl,
+                "assets": [],
+                "_mock": False,
+            }
+        
         cached = await cache_client.get(cache_key)
         if cached:
             # Smart Cache: Upgrade Mock -> Real if API key is now valid
@@ -67,6 +79,8 @@ async def generate_watchlist_report(
                 return cached
 
     # ── 2. Security: Global 5-minute AI Generation Cooldown ─────────────────
+    # This block is now only reached if refresh=True or cache missed.
+    # The cooldown check for non-refresh requests is handled above.
     cooldown_key = f"ai_generation_cooldown:{user_id}"
     cooldown_ttl = await cache_client.get_ttl(cooldown_key)
     if cooldown_ttl > 0:
@@ -74,12 +88,11 @@ async def generate_watchlist_report(
         return {
             "error": "Engine cooling down. You can generate a new analysis once every 5 minutes.",
             "cooldown_remaining": cooldown_ttl,
-            "assets": []
+            "assets": [],
+            "_mock": False,
         }
         
     logger.info(f"AI report cache {'BYPASS (force)' if refresh else 'MISS'} for user {user_id}. Generating report for {symbols}...")
-    # Set generation cooldown (300s = 5m)
-    await cache_client.set(cooldown_key, "active", expire_seconds=300)
 
     # ── 2. Multi-Tier Data Assembly ──────────────────────────────────────────
     start_assembly = time.time()
@@ -88,8 +101,11 @@ async def generate_watchlist_report(
     logger.info(f"Data assembly for {symbols} took {assembly_duration:.2f}s")
 
     # ── 3. Call Anthropic ────────────────────────────────────────────────────
+    # PRUNE CONTEXT: Ensure we don't send a massive payload that causes timeouts
+    pruned_context = _prune_context(data_context)
+    
     start_ai = time.time()
-    report = await _call_anthropic(symbols, data_context)
+    report = await _call_anthropic(symbols, pruned_context)
     ai_duration = time.time() - start_ai
     logger.info(f"Anthropic call for {symbols} took {ai_duration:.2f}s")
 
@@ -415,6 +431,7 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
         "assets": assets,
         "overall_insight": insight_text,
         "_mock": True,
+        "mock_reason": error_reason or "Missing or invalid ANTHROPIC_API_KEY; using local fallback synthesis.",
     }
 
 
@@ -424,5 +441,49 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
 
 def _report_cache_key(user_id: str, symbols: List[str]) -> str:
     """Generate a deterministic cache key based on user + sorted symbols."""
-    sym_hash = hashlib.md5(",".join(sorted(list(symbols))).encode()).hexdigest()[:12]
+    sorted_syms = sorted(list(set(symbols)))
+    sym_hash = hashlib.md5(",".join(sorted_syms).encode()).hexdigest()[:12]
     return f"ai_report:{user_id}:{sym_hash}"
+
+
+def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Trims the data context to prevent massive payloads and AI token bloat.
+    - Limits news headlines to top 2 per symbol.
+    - Removes secondary technical signals (Bollinger, etc.) for large watchlists.
+    """
+    assets = context.get("assets", [])
+    symbol_count = len(assets)
+    
+    pruned_assets = []
+    for asset in assets:
+        p_asset = asset.copy()
+        
+        # 1. Truncate News (Finnhub can return 50+ headlines)
+        news = p_asset.get("news_sentiment", {})
+        if "trending_topics" in news:
+            news["trending_topics"] = news["trending_topics"][:2]
+        
+        # 2. Strategic technical pruning for large lists
+        if symbol_count > 5:
+            technicals = p_asset.get("technicals", {})
+            for timeframe in ["1h", "1d", "1w"]:
+                tf_data = technicals.get(timeframe, {})
+                if tf_data:
+                    # Keep core trend indicators, lose volatility/secondary ones
+                    slim_tf = {
+                        "trend_signal": tf_data.get("trend_signal"),
+                        "rsi_14": tf_data.get("rsi_14"),
+                        "ema_9": tf_data.get("ema_9"),
+                        "ema_21": tf_data.get("ema_21"),
+                        "sma_50": tf_data.get("sma_50") if timeframe == "1d" else None
+                    }
+                    technicals[timeframe] = {k: v for k, v in slim_tf.items() if v is not None}
+        
+        pruned_assets.append(p_asset)
+        
+    return {
+        "assets": pruned_assets,
+        "timestamp": context.get("timestamp"),
+        "watchlist_size": symbol_count
+    }

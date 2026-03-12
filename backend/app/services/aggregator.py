@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List
 from app.core.cache import cache_client
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,49 @@ async def fetch_watchlist_prices(symbols: List[str]) -> List[Dict[str, Any]]:
     broker = get_broker()
     results = await broker.fetch_quotes(symbols)
 
+    # Last-known-good database fallback for unresolved symbols.
+    unresolved = [r["symbol"] for r in results if r.get("price", 0) <= 0]
+    if unresolved:
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal
+        from app.models.market import Asset, AssetCandle
+
+        async with AsyncSessionLocal() as db:
+            for sym in unresolved:
+                asset_res = await db.execute(select(Asset).where(Asset.symbol == sym))
+                asset = asset_res.scalars().first()
+                if not asset:
+                    continue
+
+                candle_res = await db.execute(
+                    select(AssetCandle)
+                    .where(AssetCandle.asset_id == asset.id)
+                    .order_by(AssetCandle.timestamp.desc())
+                    .limit(2)
+                )
+                candles = candle_res.scalars().all()
+                if not candles:
+                    continue
+
+                latest = candles[0]
+                prev_close = candles[1].close if len(candles) > 1 and candles[1].close else latest.close
+                pct = 0.0
+                if prev_close:
+                    pct = ((latest.close - prev_close) / prev_close) * 100.0
+
+                replacement = {
+                    "symbol": sym,
+                    "price": round(float(latest.close), 4 if latest.close < 5 else 2),
+                    "changePercent": round(float(pct), 2),
+                    "as_of": latest.timestamp.isoformat(),
+                    "is_stale": True,
+                    "source": "db_last_known_good",
+                }
+                for idx, item in enumerate(results):
+                    if item.get("symbol") == sym and item.get("price", 0) <= 0:
+                        results[idx] = replacement
+                        break
+
     # Apply shimmer right before returning to ensure every call is unique
     return apply_dev_shimmer(results)
 
@@ -57,8 +101,20 @@ async def generate_dashboard_pulse() -> Dict[str, Any]:
     cache_key = "dashboard_pulse_global"
     cached_data = await cache_client.get(cache_key)
     if cached_data:
+        generated_at = cached_data.get("generated_at")
+        now = datetime.now(timezone.utc)
+        staleness_seconds = 0
+        if generated_at:
+            try:
+                generated_dt = datetime.fromisoformat(generated_at)
+                staleness_seconds = max(0, int((now - generated_dt).total_seconds()))
+            except ValueError:
+                staleness_seconds = 0
         # Crucial: Apply shimmer AFTER cache retrieval so every poll is unique
         cached_data["market_overview"] = apply_dev_shimmer(cached_data["market_overview"])
+        cached_data["served_at"] = now.isoformat()
+        cached_data["staleness_seconds"] = staleness_seconds
+        cached_data["is_stale"] = staleness_seconds > 15
         return cached_data
 
     logger.info("Cache miss for Dashboard Pulse. Fetching from Finnhub + CoinGecko...")
@@ -78,7 +134,8 @@ async def generate_dashboard_pulse() -> Dict[str, Any]:
 
     payload = {
         "market_overview": overview_results,
-        "sentiment": btc_sentiment
+        "sentiment": btc_sentiment,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Save to Redis for 10 seconds (aligned with frontend pollers)
@@ -87,5 +144,8 @@ async def generate_dashboard_pulse() -> Dict[str, Any]:
     # Apply shimmer to the final outgoing payload (after cache storage)
     # This ensures even cached responses have a unique pulsatile jitter.
     payload["market_overview"] = apply_dev_shimmer(payload["market_overview"])
+    payload["served_at"] = datetime.now(timezone.utc).isoformat()
+    payload["staleness_seconds"] = 0
+    payload["is_stale"] = False
 
     return payload

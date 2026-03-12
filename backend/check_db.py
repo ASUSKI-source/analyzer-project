@@ -10,13 +10,8 @@ async def check_schema():
         print(f"Columns in 'users' table: {columns}")
         if 'dismissed_symbols' not in columns:
             print("MISSING COLUMN: dismissed_symbols")
-            print("Attempting to add column...")
-            try:
-                await conn.execute(text("ALTER TABLE users ADD COLUMN dismissed_symbols VARCHAR[] DEFAULT '{}';"))
-                await conn.commit()
-                print("Successfully added column.")
-            except Exception as e:
-                print(f"Failed to add column: {e}")
+            print("Schema mutation is intentionally disabled in this helper.")
+            print("Use Alembic migrations to add missing columns.")
         else:
             print("Column 'dismissed_symbols' already exists.")
 

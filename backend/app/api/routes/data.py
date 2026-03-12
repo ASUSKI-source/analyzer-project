@@ -3,15 +3,23 @@ from datetime import datetime
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_admin_user, get_current_user
 from app.core.database import get_db
-from app.services.market_data import sync_asset_history, get_asset_history
-from app.services.aggregator import generate_dashboard_pulse, fetch_watchlist_prices
-from app.services.finnhub import fetch_news_sentiment, fetch_fundamentals
-from app.services.indicators import compute_technical_indicators
+from app.models.user import User
 from app.schemas.market import (
-    DashboardPulseResponse, AssetHistoryResponse, NewsSentiment, MarketQuote,
-    AssetAnalysisResponse, TechnicalIndicators, FundamentalData
+    AssetAnalysisResponse,
+    AssetHistoryResponse,
+    DashboardPulseResponse,
+    FundamentalData,
+    MarketQuote,
+    NewsSentiment,
+    TechnicalIndicators,
 )
+from app.services.aggregator import fetch_watchlist_prices, generate_dashboard_pulse
+from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment
+from app.services.indicators import compute_technical_indicators
+from app.services.market_data import get_asset_history, sync_asset_history
 
 router = APIRouter()
 
@@ -42,7 +50,11 @@ async def get_prices(symbols: str = Query(..., description="Comma-separated symb
 
 
 @router.get("/assets/{symbol}/analysis", response_model=AssetAnalysisResponse)
-async def get_asset_analysis(symbol: str, db: AsyncSession = Depends(get_db)):
+async def get_asset_analysis(
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+):
     """
     Ultimate Deep-Dive: Fetches Price, Technicals, Fundamentals, and Sentiment in parallel.
     Future-proofed for predictive modules and advanced UI widgets.
@@ -98,33 +110,43 @@ async def get_history(
     price_results = await fetch_watchlist_prices([symbol])
     current_price = price_results[0].get("price") if price_results else None
 
-    # Pass the refresh flag to the service layer
-    chart_data = await get_asset_history(
+    chart_data, meta = await get_asset_history(
         db=db, 
         symbol=symbol, 
         days=days, 
         current_price=current_price,
-        refresh=refresh
+        refresh=refresh,
+        return_meta=True,
     )
     return {
         "status": "success",
         "symbol": symbol,
-        "data": chart_data
+        "data": chart_data,
+        "source": meta.get("source"),
+        "as_of": meta.get("as_of"),
+        "staleness_seconds": meta.get("staleness_seconds"),
+        "is_stale": meta.get("is_stale"),
     }
 
 
 @router.post("/assets/{symbol}/sync")
-async def sync_asset(symbol: str, days: int = 30, db: AsyncSession = Depends(get_db)):
+async def sync_asset(
+    symbol: str,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _admin_user: User = Depends(get_admin_user),
+):
     """
     Manually trigger a data pull from external providers.
+    Restricted to admin users.
     """
     symbol = symbol.upper()
     candles_count = await sync_asset_history(db=db, symbol=symbol, days=days)
     return {
         "status": "success",
         "symbol": symbol,
-        "message": f"Successfully fetched and upserted historical candle data.",
-        "processed_records": candles_count
+        "message": "Successfully fetched and upserted historical candle data.",
+        "processed_records": candles_count,
     }
 
 
