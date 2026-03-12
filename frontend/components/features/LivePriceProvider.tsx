@@ -37,7 +37,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
   const pendingPricesRef = useRef<Record<string, number>>({});
   const flushRequestRef = useRef<number | null>(null);
 
-  const flushPrices = useCallback(() => {
+  const flushPrices = useCallback((): void => {
     if (Object.keys(pendingPricesRef.current).length === 0) {
       flushRequestRef.current = null;
       return;
@@ -52,7 +52,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
     flushRequestRef.current = null;
   }, []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback((): void => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     console.log("[LivePriceProvider] Connecting to:", WS_BASE_URL);
@@ -96,12 +96,13 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
 
     ws.onclose = () => {
       setIsConnected(false);
-      console.warn("[LivePriceProvider] Disconnected. Reconnecting in 3s...");
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      console.warn("[LivePriceProvider] Disconnected.");
+      // Reconnection can be handled by the caller or a future enhancement.
+      // For now, avoid self-recursive reconnect logic to keep typing simple.
     };
 
     wsRef.current = ws;
-  }, [connect, flushPrices]);
+  }, [flushPrices]);
 
   useEffect(() => {
     connect();
