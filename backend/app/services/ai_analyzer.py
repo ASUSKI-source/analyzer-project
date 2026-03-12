@@ -30,7 +30,7 @@ _FUNDAMENTALS_CACHE_TTL = 43_200 # 12 hours — Finnhub fundamentals
 
 # ─── Anthropic Config ────────────────────────────────────────────────────────
 _ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL = "claude-3-5-haiku-latest"  # Ultra-fast, optimized for structured output
+_MODEL = "claude-3-5-haiku-20241022"  # Fast, cost-effective Haiku model
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -329,7 +329,7 @@ Provide your analysis following the output format specified in your system instr
         return _generate_mock_report(symbols, data_context, error_reason=f"Network/Internal Error: {str(e)}")
 
 
-def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], error_reason: str = None) -> Dict[str, Any]:
+def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], error_reason: Optional[str] = None) -> Dict[str, Any]:
     """Generate a realistic mock report when no API key is available or the API call fails."""
     assets = []
     for asset_data in data_context.get("assets", []):
@@ -405,5 +405,5 @@ def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], erro
 
 def _report_cache_key(user_id: str, symbols: List[str]) -> str:
     """Generate a deterministic cache key based on user + sorted symbols."""
-    sym_hash = hashlib.md5(",".join(sorted(symbols)).encode()).hexdigest()[:12]
+    sym_hash = hashlib.md5(",".join(sorted(list(symbols))).encode()).hexdigest()[:12]
     return f"ai_report:{user_id}:{sym_hash}"
