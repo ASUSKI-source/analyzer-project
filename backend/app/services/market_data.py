@@ -209,15 +209,20 @@ async def get_asset_history(
             try:
                 # Trigger actual sync to update TimescaleDB
                 await sync_asset_history(db, symbol, days=max(days, 30), timeframe=timeframe)
-                
-                # Update cooldown and bucket
-                await cache_client.set(asset_cooldown_key, "locked", expire_seconds=30)
-                await cache_client.increment(global_bucket_key)
-                if int(global_count) == 0:
-                    # Initialize expiry for the bucket window (1 minute)
-                    await cache_client.expire(global_bucket_key, 60)
             except Exception as e:
                 logger.error(f"Failed to sync asset on refresh: {e}")
+            else:
+                # Update cooldown and bucket (non-fatal if cache backend is degraded)
+                try:
+                    await cache_client.set(asset_cooldown_key, "locked", expire_seconds=30)
+                    new_count = await cache_client.increment(global_bucket_key)
+                    if int(global_count) == 0 or int(new_count) == 1:
+                        # Initialize expiry for the bucket window (1 minute)
+                        await cache_client.expire(global_bucket_key, 60)
+                except Exception as cache_err:
+                    logger.warning(
+                        f"Refresh sync for {symbol} succeeded but cache bucket update failed: {cache_err}"
+                    )
         else:
             reason = "Global Limit" if int(global_count) >= 4 else "Asset Cooldown"
             logger.warning(f"Refresh requested for {symbol} but throttled due to {reason}.")

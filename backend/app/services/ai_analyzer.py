@@ -15,6 +15,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -458,11 +459,35 @@ Provide your analysis following the output format specified in your system instr
         }
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"Anthropic API error: {e.response.status_code} - {e.response.text[:200]}")
-        return _generate_mock_report(symbols, data_context, error_reason=f"Anthropic API Error {e.response.status_code}: {e.response.text[:100]}")
+        endpoint = _sanitize_url_for_logs(str(e.request.url)) if e.request else _ANTHROPIC_API_URL
+        body_preview = _sanitize_error_message(e.response.text[:200] if e.response and e.response.text else "")
+        logger.error(
+            "%s Anthropic API error status=%s endpoint=%s body=%s",
+            log_prefix,
+            e.response.status_code if e.response else "unknown",
+            endpoint,
+            body_preview,
+        )
+        reason = f"Anthropic API Error {e.response.status_code if e.response else 'unknown'}"
+        if body_preview:
+            reason = f"{reason}: {body_preview[:120]}"
+        return _generate_mock_report(symbols, data_context, error_reason=reason)
     except Exception as e:
-        logger.error(f"Anthropic call failed: {e}")
-        return _generate_mock_report(symbols, data_context, error_reason=f"Network/Internal Error: {str(e)}")
+        sanitized = _sanitize_error_message(str(e))
+        if not sanitized:
+            sanitized = _sanitize_error_message(repr(e))
+        logger.error(
+            "%s Anthropic call failed type=%s detail=%s",
+            log_prefix,
+            type(e).__name__,
+            sanitized or "no_message",
+        )
+        detail = sanitized or "no_message"
+        return _generate_mock_report(
+            symbols,
+            data_context,
+            error_reason=f"Network/Internal Error ({type(e).__name__}): {detail}",
+        )
 
 
 def _seconds_remaining(deadline: float) -> float:
@@ -532,6 +557,33 @@ def _parse_ai_json_response(
             return parsed_normalized
 
     return None
+
+
+def _sanitize_url_for_logs(url: str) -> str:
+    """
+    Remove query strings from URLs to avoid leaking tokens in logs.
+    """
+    try:
+        parts = urlsplit(url)
+        return f"{parts.scheme}://{parts.netloc}{parts.path}"
+    except Exception:
+        return _ANTHROPIC_API_URL
+
+
+def _sanitize_error_message(message: str) -> str:
+    """
+    Best-effort sanitization for logs and user-safe error metadata.
+    """
+    if not message:
+        return ""
+    import re
+
+    sanitized = message
+    # remove obvious token/api-key style query params
+    sanitized = re.sub(r"([?&](?:token|api[_-]?key|x-api-key)=)[^&\\s]+", r"\1<redacted>", sanitized, flags=re.I)
+    # collapse whitespace for concise logging
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return sanitized[:400]
 
 
 def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], error_reason: Optional[str] = None) -> Dict[str, Any]:

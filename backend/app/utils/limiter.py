@@ -20,9 +20,13 @@ class PolygonRateLimiter:
         Priority 1: Strategic Sync (Daily/Weekly) - Always attempts if tokens > 0.
         Priority 2: Tactical Sync (Intraday 5m) - Rejects if bucket is low (< 2 tokens).
         """
-        # 1. Fetch current bucket count
-        count = await cache_client.get(cls.BUCKET_KEY) or 0
-        count = int(count)
+        try:
+            # 1. Fetch current bucket count
+            count = await cache_client.get(cls.BUCKET_KEY) or 0
+            count = int(count)
+        except Exception as e:
+            logger.error(f"Polygon Rate Limit: cache get failed, rejecting token request safely: {e}")
+            return False
         
         # 2. Priority Rail: Tactical syncs are rejected if we are near the margin
         if priority == 2 and count >= (cls.LIMIT - 1):
@@ -36,9 +40,13 @@ class PolygonRateLimiter:
             
         # 4. Increment and set expiry if this is the first token in the window
         # We use a simple windowed-increment for the 1-minute bucket
-        new_count = await cache_client.increment(cls.BUCKET_KEY)
-        if new_count == 1:
-            await cache_client.expire(cls.BUCKET_KEY, cls.REFILL_TIME)
+        try:
+            new_count = await cache_client.increment(cls.BUCKET_KEY)
+            if new_count == 1:
+                await cache_client.expire(cls.BUCKET_KEY, cls.REFILL_TIME)
+        except Exception as e:
+            logger.error(f"Polygon Rate Limit: cache increment/expire failed, rejecting token request safely: {e}")
+            return False
             
         logger.info(f"Polygon Token Acquired: {new_count}/{cls.LIMIT} (Priority: {priority})")
         return True

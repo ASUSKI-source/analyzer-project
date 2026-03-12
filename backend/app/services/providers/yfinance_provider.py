@@ -19,14 +19,19 @@ class YFinanceProvider(BaseProvider):
     """
     name = "yfinance"
     speed_weight = 0.3  # Lowest priority — only used when paid providers run low
+    _UNSUPPORTED_NOISY_SYMBOLS = {"VIX", "^VIX"}
 
     def __init__(self):
         super().__init__()
         self._remaining_quota = 999  # Effectively unlimited
 
     def supports_symbol(self, symbol: str) -> bool:
-        """yfinance supports virtually all tradeable symbols."""
-        return True
+        """
+        yfinance supports most symbols, but some known ticker aliases are
+        repeatedly noisy/unreliable in this stack (e.g. VIX).
+        """
+        sym = symbol.upper().strip()
+        return sym not in self._UNSUPPORTED_NOISY_SYMBOLS
 
     async def fetch_quotes(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """
