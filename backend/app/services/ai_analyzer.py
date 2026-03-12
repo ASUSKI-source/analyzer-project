@@ -30,7 +30,7 @@ _FUNDAMENTALS_CACHE_TTL = 43_200 # 12 hours — Finnhub fundamentals
 
 # ─── Anthropic Config ────────────────────────────────────────────────────────
 _ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL = "claude-3-5-haiku-20241022"  # Fast, cost-effective Haiku model
+_MODEL = "claude-4-5-haiku"  # Specific model requested by user
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
