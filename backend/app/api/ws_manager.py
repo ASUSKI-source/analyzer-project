@@ -55,8 +55,9 @@ class ConnectionManager:
         self.client_subscriptions[websocket].add(symbol)
         if symbol not in self.symbol_subscriptions:
             self.symbol_subscriptions[symbol] = set()
-            # First person to watch this symbol? Tell Polygon to start streaming it.
-            asyncio.create_task(streamer.subscribe(symbol))
+            # First person to watch this symbol? Tell provider to start streaming it.
+            # BaseStreamer.subscribe internalizes the symbol set management
+            await streamer.subscribe(symbol)
             
         self.symbol_subscriptions[symbol].add(websocket)
         logger.info(f"Client subscribed to {symbol}. Total watchers: {len(self.symbol_subscriptions[symbol])}")
@@ -71,16 +72,21 @@ class ConnectionManager:
             self.symbol_subscriptions[symbol].discard(websocket)
             if not self.symbol_subscriptions[symbol]:
                 del self.symbol_subscriptions[symbol]
-                asyncio.create_task(streamer.unsubscribe(symbol))
+                # Last person left? Unsubscribe from provider to save resources.
+                await streamer.unsubscribe(symbol)
 
     async def _redis_relay_loop(self):
         """
         Background task that listens to ALL price updates in Redis 
         and pushes them to the relevant WebSockets.
         """
-        pubsub = cache_client.client.pubsub()
+        if not cache_client.redis:
+            logger.error("Redis client not initialized. Relay loop aborting.")
+            return
+
+        pubsub = cache_client.redis.pubsub()
         # We listen to a wildcard pattern for all market data ticks
-        await pubsub.psubscribe("market_data:ticks:*")
+        await pubsub.psubscribe("ticker:*")
         
         try:
             async for message in pubsub.listen():
@@ -89,8 +95,11 @@ class ConnectionManager:
                 
                 if message["type"] == "pmessage":
                     try:
-                        # Channel looks like market_data:ticks:AAPL
-                        channel = message["channel"].decode("utf-8")
+                        # Channel looks like ticker:AAPL
+                        channel = message["channel"]
+                        if isinstance(channel, bytes):
+                            channel = channel.decode("utf-8")
+                        
                         symbol = channel.split(":")[-1]
                         data = json.loads(message["data"])
                         
@@ -104,7 +113,7 @@ class ConnectionManager:
                                     await client.send_json({
                                         "type": "TICK",
                                         "symbol": symbol,
-                                        "data": data
+                                        "data": data  # This is the normalized tick from FinnhubStreamer
                                     })
                                 except Exception:
                                     dead_clients.append(client)

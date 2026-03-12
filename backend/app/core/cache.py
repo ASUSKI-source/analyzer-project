@@ -107,3 +107,9 @@ class CacheClient:
             await self.redis.aclose()
 
 cache_client = CacheClient()
+
+async def get_redis():
+    """Helper to ensure cache_client is connected and returned."""
+    if not cache_client.redis:
+        await cache_client.connect()
+    return cache_client.redis

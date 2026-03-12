@@ -20,15 +20,37 @@ interface LivePriceContextType {
   prices: Record<string, number>;
   subscribe: (symbol: string) => void;
   unsubscribe: (symbol: string) => void;
+  isConnected: boolean;
 }
 
 const LivePriceContext = createContext<LivePriceContextType | undefined>(undefined);
 
 export function LivePriceProvider({ children }: { children: React.ReactNode }) {
   const [prices, setPrices] = useState<Record<string, number>>({});
+  const [isConnected, setIsConnected] = useState(false);
+  
   const wsRef = useRef<WebSocket | null>(null);
   const subsRef = useRef<Set<string>>(new Set());
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // High-frequency price buffer to avoid React re-render thrashing
+  const pendingPricesRef = useRef<Record<string, number>>({});
+  const flushRequestRef = useRef<number | null>(null);
+
+  const flushPrices = useCallback(() => {
+    if (Object.keys(pendingPricesRef.current).length === 0) {
+      flushRequestRef.current = null;
+      return;
+    }
+
+    setPrices((prev) => ({
+      ...prev,
+      ...pendingPricesRef.current,
+    }));
+    
+    pendingPricesRef.current = {};
+    flushRequestRef.current = null;
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -38,6 +60,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
 
     ws.onopen = () => {
       console.log("[LivePriceProvider] Connected.");
+      setIsConnected(true);
       // Restore previous subscriptions
       subsRef.current.forEach((symbol) => {
         ws.send(JSON.stringify({ type: "SUBSCRIBE", symbol }));
@@ -53,10 +76,17 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
         const msg = JSON.parse(event.data);
         if (msg.type === "TICK") {
           const { symbol, data } = msg;
-          // Polygon aggregate second data has 'c' for close price
-          const price = data.c || data.p; 
+          // Support multiple provider formats (Finnhub 'price', Polygon 'c', etc.)
+          const price = data.price || data.c || data.p;
+          
           if (price) {
-            setPrices((prev) => ({ ...prev, [symbol]: price }));
+            // Buffer the price update
+            pendingPricesRef.current[symbol] = price;
+            
+            // Schedule a flush if one isn't already pending
+            if (!flushRequestRef.current) {
+                flushRequestRef.current = requestAnimationFrame(flushPrices);
+            }
           }
         }
       } catch (e) {
@@ -65,18 +95,20 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
     };
 
     ws.onclose = () => {
+      setIsConnected(false);
       console.warn("[LivePriceProvider] Disconnected. Reconnecting in 3s...");
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
 
     wsRef.current = ws;
-  }, []);
+  }, [connect, flushPrices]);
 
   useEffect(() => {
     connect();
     return () => {
       if (wsRef.current) wsRef.current.close();
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (flushRequestRef.current) cancelAnimationFrame(flushRequestRef.current);
     };
   }, [connect]);
 
@@ -101,7 +133,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <LivePriceContext.Provider value={{ prices, subscribe, unsubscribe }}>
+    <LivePriceContext.Provider value={{ prices, subscribe, unsubscribe, isConnected }}>
       {children}
     </LivePriceContext.Provider>
   );
@@ -115,8 +147,9 @@ export function useLivePrice(symbol?: string) {
 
   useEffect(() => {
     if (symbol) {
-      context.subscribe(symbol);
-      return () => context.unsubscribe(symbol);
+      const sym = symbol.toUpperCase();
+      context.subscribe(sym);
+      return () => context.unsubscribe(sym);
     }
   }, [symbol, context]);
 

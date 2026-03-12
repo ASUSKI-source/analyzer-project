@@ -56,7 +56,7 @@ async def startup_event():
         logger.error(f"Failed to connect to database at startup: {e}")
         logger.warning("Backend is running in 'Degraded Mode' (no database features).")
 
-    # Start the Polygon Real-time Streamer
+    # Start the Finnhub Real-time Streamer
     await streamer.start()
 
 @app.on_event("shutdown")
