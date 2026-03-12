@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Defaults to the owner account; can be overridden via environment.
     ADMIN_EMAILS: str | None = "drewsuski@gmail.com"
 
+    # Enable extra timing/debug metadata in AI responses (non-prod debugging).
+    AI_DEBUG_TIMING: bool = False
+
     # Config ensures Pydantic looks for a .env file and errors out if critical vars (like DATABASE_URL) are missing
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).resolve().parent.parent.parent / ".env"),

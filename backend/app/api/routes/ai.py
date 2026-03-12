@@ -3,11 +3,14 @@ AI Analysis Routes — Serves AI-powered watchlist reports.
 """
 import asyncio
 import logging
+import uuid
 from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.database import get_db
+
 from app.api.deps import get_current_user
+from app.core.database import get_db
 from app.models.user import User
 from app.services.ai_analyzer import generate_watchlist_report
 from app.services.watchlist import get_user_watchlist
@@ -55,16 +58,27 @@ async def get_watchlist_analysis(
 
     user_id = str(current_user.id)
 
+    request_id = str(uuid.uuid4())
+
     # Global timeout: Railway's proxy will kill our connection at ~30s.
     # We enforce 25s so we ALWAYS return a response (even a partial one)
     # before the proxy drops us — preventing the phantom CORS error.
     try:
         report = await asyncio.wait_for(
-            generate_watchlist_report(symbols=symbol_list, user_id=user_id, db=db, refresh=refresh),
+            generate_watchlist_report(
+                symbols=symbol_list,
+                user_id=user_id,
+                db=db,
+                refresh=refresh,
+                request_id=request_id,
+            ),
             timeout=_ENDPOINT_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        logger.error(f"AI report generation timed out after {_ENDPOINT_TIMEOUT}s for user {user_id}")
+        logger.error(
+            f"[ai_report][user={user_id}][req={request_id}] timed out after "
+            f"{_ENDPOINT_TIMEOUT}s for symbols={symbol_list}"
+        )
         return {
             "market_summary": "Analysis timed out. This often happens if the data provider (Finnhub) is under heavy load or rate-limiting. We are currently optimizing data assembly to be more resilient.",
             "watchlist_health": "MIXED",

@@ -12,15 +12,15 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
 from app.core.cache import cache_client
 from app.core.config import settings
 from app.utils.http import get_http_client
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ async def generate_watchlist_report(
     user_id: str,
     db: Any,
     refresh: bool = False,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Assemble a comprehensive AI analysis report for the given watchlist symbols.
@@ -92,30 +93,53 @@ async def generate_watchlist_report(
             "_mock": False,
         }
         
-    logger.info(f"AI report cache {'BYPASS (force)' if refresh else 'MISS'} for user {user_id}. Generating report for {symbols}...")
+    log_prefix = f"[ai_report][user={user_id}][req={request_id or '-'}]"
+    logger.info(
+        f"{log_prefix} cache {'BYPASS (force)' if refresh else 'MISS'}. "
+        f"Generating report for symbols={symbols}."
+    )
 
     # ── 2. Multi-Tier Data Assembly ──────────────────────────────────────────
+    total_start = time.time()
+
     start_assembly = time.time()
     data_context = await _assemble_data_context(symbols, db)
     assembly_duration = time.time() - start_assembly
-    logger.info(f"Data assembly for {symbols} took {assembly_duration:.2f}s")
+    logger.info(
+        f"{log_prefix} data assembly completed in {assembly_duration:.2f}s "
+        f"for symbols={symbols}."
+    )
 
     # ── 3. Call Anthropic ────────────────────────────────────────────────────
     # PRUNE CONTEXT: Ensure we don't send a massive payload that causes timeouts
     pruned_context = _prune_context(data_context)
-    
+
     start_ai = time.time()
     report = await _call_anthropic(symbols, pruned_context)
     ai_duration = time.time() - start_ai
-    logger.info(f"Anthropic call for {symbols} took {ai_duration:.2f}s")
+    total_duration = time.time() - total_start
+
+    logger.info(
+        f"{log_prefix} Anthropic call completed in {ai_duration:.2f}s; "
+        f"end-to-end report generation took {total_duration:.2f}s."
+    )
 
     # ── 4. Cache & Return ────────────────────────────────────────────────────
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     report["symbols_analyzed"] = symbols
     report["from_cache"] = False
 
+    if getattr(settings, "AI_DEBUG_TIMING", False):
+        report["_debug_timing"] = {
+            "request_id": request_id,
+            "assembly_seconds": round(assembly_duration, 3),
+            "ai_seconds": round(ai_duration, 3),
+            "total_seconds": round(total_duration, 3),
+            "symbol_count": len(symbols),
+        }
+
     await cache_client.set(cache_key, report, expire_seconds=_REPORT_CACHE_TTL)
-    logger.info(f"AI report cached for user {user_id} (8h TTL)")
+    logger.info(f"{log_prefix} AI report cached (8h TTL) for cache_key={cache_key}")
 
     return report
 
