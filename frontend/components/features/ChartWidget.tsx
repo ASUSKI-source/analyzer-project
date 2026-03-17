@@ -211,7 +211,7 @@ export function ChartWidget({
     <div className="relative flex-1 w-full h-full min-h-[250px]">
       {/* Live Indicator Overlay */}
       {!loading && !error && (
-        <div className="absolute bottom-4 right-4 z-20 flex items-center gap-3 opacity-60 hover:opacity-100 transition-opacity duration-300">
+        <div className="absolute bottom-1 right-2 z-20 flex items-center gap-3 opacity-40 hover:opacity-100 transition-opacity duration-300 pointer-events-none hover:pointer-events-auto">
           {/* Socket Status */}
           <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
             <div className="relative flex h-2 w-2">
