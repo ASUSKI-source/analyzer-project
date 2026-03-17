@@ -125,7 +125,7 @@ class ConnectionManager:
                     except Exception as e:
                         logger.error(f"Error in Redis Relay push: {e}")
         finally:
-            await pubsub.punsubscribe("market_data:ticks:*")
+            await pubsub.punsubscribe("ticker:*")
             self._is_running = False
 
 # Global singleton

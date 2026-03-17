@@ -98,13 +98,19 @@ class FinnhubStreamer(BaseStreamer):
     async def _send_subscription(self, symbol: str):
         """Internal helper to send subscription message with provider-specific symbol mapping."""
         if self._ws:
-            # Map simple symbols to Finnhub formats if needed
-            # For Stocks, it's usually just the symbol (e.g., AAPL)
-            # For Crypto, Finnhub free tier likes 'BINANCE:BTCUSDT'
-            target_symbol = symbol
-            if symbol in ["BTC", "ETH", "SOL", "DOGE"]:
-                target_symbol = f"BINANCE:{symbol}USDT"
+            # Map simple symbols to Finnhub formats using our service mapping
+            from app.services.coingecko import SYMBOL_TO_BINANCE
             
+            target_symbol = SYMBOL_TO_BINANCE.get(symbol.upper(), symbol)
+            # Finnhub free tier likes 'BINANCE:BTCUSDT' for crypto
+            if ":" not in target_symbol and any(c in target_symbol for c in ["USD", "USDT"]):
+                 # If it looks like a pair but lacks the prefix, it might need one (provider specific)
+                 pass 
+            
+            # Special case for our recognized cryptos if they aren't already prefixed
+            if symbol.upper() in SYMBOL_TO_BINANCE:
+                target_symbol = f"BINANCE:{SYMBOL_TO_BINANCE[symbol.upper()]}"
+
             payload = {"type": "subscribe", "symbol": target_symbol}
             await self._ws.send(json.dumps(payload))
             logger.info(f"Subscribed to {symbol} (as {target_symbol}) on Finnhub.")
@@ -121,10 +127,10 @@ class FinnhubStreamer(BaseStreamer):
         if symbol in self.active_symbols:
             self.active_symbols.remove(symbol)
             if self._ws:
-                # Map back to provider format for unsubscribe
-                target_symbol = symbol
-                if symbol in ["BTC", "ETH", "SOL", "DOGE"]:
-                    target_symbol = f"BINANCE:{symbol}USDT"
+                from app.services.coingecko import SYMBOL_TO_BINANCE
+                target_symbol = SYMBOL_TO_BINANCE.get(symbol.upper(), symbol)
+                if symbol.upper() in SYMBOL_TO_BINANCE:
+                    target_symbol = f"BINANCE:{SYMBOL_TO_BINANCE[symbol.upper()]}"
                     
                 payload = {"type": "unsubscribe", "symbol": target_symbol}
                 await self._ws.send(json.dumps(payload))
@@ -159,6 +165,10 @@ class FinnhubStreamer(BaseStreamer):
         Normalize Finnhub trade data to our internal tick format.
         Finnhub format: [{'p': price, 's': symbol, 't': timestamp, 'v': volume}]
         """
+        from app.services.coingecko import SYMBOL_TO_BINANCE
+        # Create inverse mapping once for fast lookup
+        INVERSE_BINANCE = {v: k for k, v in SYMBOL_TO_BINANCE.items()}
+        
         for trade in trades:
             raw_symbol = trade['s']
             price = trade['p']
@@ -167,9 +177,15 @@ class FinnhubStreamer(BaseStreamer):
             
             # Map back provider symbol to our internal symbol
             # (e.g. 'BINANCE:BTCUSDT' -> 'BTC')
-            symbol = raw_symbol
-            if raw_symbol.startswith("BINANCE:") and raw_symbol.endswith("USDT"):
-                symbol = raw_symbol.replace("BINANCE:", "").replace("USDT", "")
+            clean_symbol = raw_symbol
+            if ":" in raw_symbol:
+                clean_symbol = raw_symbol.split(":")[-1]
+            
+            # Check if this "clean" symbol is one of our mapped ones
+            symbol = INVERSE_BINANCE.get(clean_symbol, clean_symbol)
+            # Handle some common suffix removals if not in mapping
+            if symbol.endswith("USDT") and symbol != "USDT":
+                symbol = symbol.replace("USDT", "")
             
             # Normalize to our 'tick' format
             normalized = {

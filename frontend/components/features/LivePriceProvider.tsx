@@ -76,21 +76,24 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
         const msg = JSON.parse(event.data);
         if (msg.type === "TICK") {
           const { symbol, data } = msg;
-          // Support multiple provider formats (Finnhub 'price', Polygon 'c', etc.)
           const price = data.price || data.c || data.p;
           const volume = data.volume || data.v || data.s || 0;
           const timestamp = data.timestamp || data.t || Date.now();
           
           if (price) {
-            // Buffer the tick update
-            pendingTicksRef.current[symbol] = {
+            // Fuzzy match: If we get 'BTC' but subscriber is watching 'BTC-USD'
+            // or vice versa, find the intended target.
+            const targetSymbol = Object.keys(pendingTicksRef.current).find(s => 
+              s === symbol || s.split('-')[0] === symbol || symbol.split('-')[0] === s
+            ) || symbol;
+
+            pendingTicksRef.current[targetSymbol] = {
               p: price,
               s: volume,
               t: timestamp,
-              sym: symbol
+              sym: targetSymbol
             };
             
-            // Schedule a flush if one isn't already pending
             if (!flushRequestRef.current) {
                 flushRequestRef.current = requestAnimationFrame(flushTicks);
             }
