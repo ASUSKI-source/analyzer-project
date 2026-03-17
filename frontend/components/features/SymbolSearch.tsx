@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Check, Plus, Search, X } from "lucide-react";
+import { AlertCircle, Bitcoin, Check, Plus, Search, TrendingUp, X } from "lucide-react";
 import { API_BASE_URL } from "@/services/api_client";
 
 type SearchResult = {
   symbol: string;
+  type?: string;
 };
 
 type Props = {
@@ -20,6 +21,7 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
   const [addingSymbol, setAddingSymbol] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [justAdded, setJustAdded] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const cleaned = query.trim();
@@ -37,7 +39,12 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
         });
         if (res.ok) {
           const data = await res.json();
-          setResults((data.results || []).map((r: any) => ({ symbol: String(r.symbol || "").toUpperCase() })));
+          setResults(
+            (data.results || []).map((r: any) => ({
+              symbol: String(r.symbol || "").toUpperCase(),
+              type: String(r.type || "").toLowerCase(),
+            }))
+          );
           setIsOpen(true);
         } else {
           setResults([]);
@@ -66,7 +73,11 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
   }, []);
 
   const handleAdd = async (symbol: string) => {
-    if (!onAddSymbol) return;
+    if (!onAddSymbol) {
+      return;
+    }
+
+    setError(null);
 
     setAddingSymbol(symbol);
     const success = await onAddSymbol(symbol);
@@ -79,6 +90,8 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
         next.delete(symbol);
         return next;
       }), 1400);
+    } else {
+      setError("Could not add symbol. Check that you are logged in and have an active watchlist.");
     }
   };
 
@@ -129,17 +142,38 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
       </div>
 
       {/* Dropdown Results */}
-      {isOpen && results.length > 0 && (
-        <div className={`
-          absolute top-full left-0 right-0 mt-2 rounded-xl border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200
-          ${isMobileSearchOpen ? 'w-[calc(100vw-3rem)] left-1/2 -translate-x-1/2' : 'w-full'}
-        `}>
+      {isOpen && (results.length > 0 || error || query.length > 0) && (
+        <div
+          className={`
+            absolute top-full mt-2 rounded-lg border border-white/10 bg-slate-900/95
+            backdrop-blur-xl shadow-2xl overflow-hidden z-50 animate-in fade-in
+            slide-in-from-top-2 duration-150 max-h-64 overflow-y-auto
+            ${isMobileSearchOpen ? 'left-1/2 -translate-x-1/2 w-[calc(100vw-3rem)]' : 'left-0 w-full max-w-xs'}
+          `}
+        >
           {results.map((r) => (
             <div
               key={r.symbol}
-              className="flex items-center justify-between px-4 py-2.5 hover:bg-white/5 transition-colors group cursor-default"
+              className="flex items-center justify-between px-3 py-1.5 hover:bg-white/5 transition-colors cursor-default"
             >
-              <span className="text-sm font-semibold text-marble font-mono tracking-wide">{r.symbol}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <div
+                  className={`h-6 w-6 rounded-md flex items-center justify-center text-[11px] ${
+                    r.type === "crypto"
+                      ? "bg-amber-500/10 text-amber-300"
+                      : "bg-blue-500/10 text-blue-300"
+                  }`}
+                >
+                  {r.type === "crypto" ? (
+                    <Bitcoin className="w-3.5 h-3.5" />
+                  ) : (
+                    <TrendingUp className="w-3.5 h-3.5" />
+                  )}
+                </div>
+                <span className="text-sm font-semibold text-marble font-mono tracking-wide truncate">
+                  {r.symbol}
+                </span>
+              </div>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -161,12 +195,19 @@ export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
               </button>
             </div>
           ))}
-        </div>
-      )}
 
-      {isOpen && query.length > 0 && results.length === 0 && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[calc(100vw-3rem)] md:w-full mt-2 rounded-xl border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl p-4 text-center text-steel text-sm z-50">
-          No results for &ldquo;{query}&rdquo;
+          {results.length === 0 && query.length > 0 && !error && (
+            <div className="px-3 py-2 text-center text-steel text-xs">
+              No results for &ldquo;{query}&rdquo;
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-start gap-2 px-3 py-2 border-t border-red-500/30 bg-red-500/5">
+              <AlertCircle className="w-3.5 h-3.5 text-red-400 mt-0.5" />
+              <p className="text-[11px] text-red-300 leading-snug">{error}</p>
+            </div>
+          )}
         </div>
       )}
     </div>

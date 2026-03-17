@@ -131,7 +131,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     }
 
     const token = getToken();
-    if (!token) return false;
+    if (!token || !user) return false;
 
     try {
       const res = await fetch(`${API_BASE_URL}/watchlist/${activeId}/symbols`, {
