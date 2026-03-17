@@ -5,6 +5,7 @@ Routes only call these functions and return their output.
 """
 import logging
 import re
+import uuid as _uuid
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, func
@@ -15,9 +16,22 @@ from app.models.market import Asset
 logger = logging.getLogger(__name__)
 
 
-async def _get_user_watchlist(db: AsyncSession, watchlist_id: str, user_id: Any) -> Watchlist | None:
+def _to_uuid(value: Any) -> _uuid.UUID | None:
+    """Safely coerce a string or UUID to a uuid.UUID; return None on failure."""
+    if isinstance(value, _uuid.UUID):
+        return value
+    try:
+        return _uuid.UUID(str(value))
+    except (ValueError, AttributeError):
+        return None
+
+
+async def _get_user_watchlist(db: AsyncSession, watchlist_id: Any, user_id: Any) -> Watchlist | None:
+    wl_uuid = _to_uuid(watchlist_id)
+    if wl_uuid is None:
+        return None
     result = await db.execute(
-        select(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user_id)
+        select(Watchlist).where(Watchlist.id == wl_uuid, Watchlist.user_id == user_id)
     )
     return result.scalars().first()
 
@@ -48,7 +62,7 @@ async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str, user: User)
     result = await db.execute(
         select(Asset)
         .join(watchlist_asset_association, Asset.id == watchlist_asset_association.c.asset_id)
-        .where(watchlist_asset_association.c.watchlist_id == watchlist_id)
+        .where(watchlist_asset_association.c.watchlist_id == watchlist.id)
         .order_by(watchlist_asset_association.c.added_at.desc())
     )
     assets = result.scalars().all()
@@ -76,7 +90,7 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, use
     existing = await db.execute(
         select(watchlist_asset_association)
         .where(
-            watchlist_asset_association.c.watchlist_id == watchlist_id,
+            watchlist_asset_association.c.watchlist_id == watchlist.id,
             watchlist_asset_association.c.asset_id == asset.id
         )
     )
@@ -84,7 +98,7 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, use
         return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": True}
 
     await db.execute(
-        watchlist_asset_association.insert().values(watchlist_id=watchlist_id, asset_id=asset.id)
+        watchlist_asset_association.insert().values(watchlist_id=watchlist.id, asset_id=asset.id)
     )
     await db.commit()
     return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": False}
@@ -103,7 +117,7 @@ async def remove_from_watchlist(db: AsyncSession, watchlist_id: str, symbol: str
     delete_result = await db.execute(
         delete(watchlist_asset_association)
         .where(
-            watchlist_asset_association.c.watchlist_id == watchlist_id,
+            watchlist_asset_association.c.watchlist_id == watchlist.id,
             watchlist_asset_association.c.asset_id == asset.id
         )
     )
@@ -113,8 +127,11 @@ async def remove_from_watchlist(db: AsyncSession, watchlist_id: str, symbol: str
 
 async def delete_watchlist(db: AsyncSession, watchlist_id: str, user: User) -> bool:
     """Delete an entire watchlist and its asset associations."""
+    wl_uuid = _to_uuid(watchlist_id)
+    if wl_uuid is None:
+        return False
     delete_result = await db.execute(
-        delete(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user.id)
+        delete(Watchlist).where(Watchlist.id == wl_uuid, Watchlist.user_id == user.id)
     )
     await db.commit()
     return delete_result.rowcount > 0
