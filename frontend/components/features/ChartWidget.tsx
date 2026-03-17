@@ -150,6 +150,7 @@ export function ChartWidget({
     });
     
     volumeSeries.priceScale().applyOptions({
+      visible: false,
       scaleMargins: {
         top: 0.8,
         bottom: 0,

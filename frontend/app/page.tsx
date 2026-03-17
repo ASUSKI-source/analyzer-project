@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2 } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2, Settings2, Search } from "lucide-react";
 import { ChartWidget } from "@/components/features/ChartWidget";
 import { useDashboardPulse, MarketQuote } from "@/hooks/useDashboardPulse";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,6 +20,47 @@ export default function Home() {
   const [chartDays, setChartDays] = useState<number>(365);
   const [chartRefreshKey, setChartRefreshKey] = useState<number>(0);
   const [isChartRefreshing, setIsChartRefreshing] = useState(false);
+  
+  // Custom Pinned Symbols State (Top 4 Boxes)
+  const [pinnedSymbols, setPinnedSymbols] = useState<string[]>(['SPY', 'QQQ', 'BTC', 'VIX']);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Load pinned symbols from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('pinned_symbols');
+    if (saved) {
+      try {
+        setPinnedSymbols(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse pinned symbols", e);
+      }
+    }
+  }, []);
+
+  // Save pinned symbols to localStorage
+  useEffect(() => {
+    localStorage.setItem('pinned_symbols', JSON.stringify(pinnedSymbols));
+  }, [pinnedSymbols]);
+
+  // Fetch prices for pinned symbols whenever they change or we poll
+  const [pinnedPrices, setPinnedPrices] = useState<MarketQuote[]>([]);
+  const fetchPinnedPrices = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/market/prices?symbols=${pinnedSymbols.join(',')}`);
+      if (res.ok) {
+        setPinnedPrices(await res.json());
+      }
+    } catch (e) {
+      console.error("Failed to fetch pinned prices", e);
+    }
+  }, [pinnedSymbols]);
+
+  useEffect(() => {
+    fetchPinnedPrices();
+    const interval = setInterval(fetchPinnedPrices, 10000);
+    return () => clearInterval(interval);
+  }, [fetchPinnedPrices]);
 
   const ytdDays = React.useMemo(() => {
     const now = new Date();
@@ -109,28 +150,23 @@ export default function Home() {
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           {/* Quick Stats Row */}
           <div className="flex overflow-x-auto snap-x snap-mandatory gap-4 pb-2 -mx-6 px-6 no-scrollbar sm:grid sm:grid-cols-4 sm:mx-0 sm:px-0 sm:pb-0 sm:overflow-visible sm:snap-none">
-            {data?.market_overview ? (
-              data.market_overview.map((item) => (
-                <div key={item.symbol} className="min-w-[85vw] sm:min-w-0 snap-center sm:snap-align-none shrink-0 sm:shrink">
+            {pinnedSymbols.map((symbol, idx) => {
+              const item = pinnedPrices.find(p => p.symbol === symbol) || { symbol, price: 0, changePercent: 0 };
+              return (
+                <div key={`${symbol}-${idx}`} className="min-w-[85vw] sm:min-w-0 snap-center sm:snap-align-none shrink-0 sm:shrink">
                   <StatCard 
-                    title={item.symbol} 
+                    title={symbol} 
                     rawPrice={item.price}
                     value={item.price > 1000 ? `$${item.price.toLocaleString(undefined, {minimumFractionDigits: 2})}` : `$${item.price.toFixed(item.price < 5 ? 4 : 2)}`}
                     change={item.price > 0 ? `${item.changePercent > 0 ? '+' : ''}${item.changePercent.toFixed(2)}%` : '—'}
                     isPositive={item.changePercent >= 0}
-                    onClick={() => setSelectedAsset(item.symbol)}
-                    isSelected={selectedAsset === item.symbol}
+                    onClick={() => setSelectedAsset(symbol)}
+                    isSelected={selectedAsset === symbol}
+                    onEdit={() => setEditingIndex(idx)}
                   />
                 </div>
-              ))
-            ) : (
-              // Loading placeholders
-              Array.from({length: 4}).map((_, i) => (
-                <div key={i} className="min-w-[85vw] sm:min-w-0 snap-center sm:snap-align-none shrink-0 sm:shrink">
-                  <div className="true-glass rounded-xl p-4 h-24 animate-pulse bg-white/5" />
-                </div>
-              ))
-            )}
+              );
+            })}
           </div>
 
           {/* Main Chart Widget */}
@@ -246,11 +282,84 @@ export default function Home() {
         </div>
 
       </div>
+
+      {/* Symbol Editor Modal */}
+      {editingIndex !== null && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="w-full max-w-md true-glass border border-white/10 rounded-2xl p-6 shadow-2xl scale-in-center">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-marble">Change Asset Bubble</h3>
+              <button 
+                onClick={() => {
+                  setEditingIndex(null);
+                  setSearchQuery("");
+                }} 
+                className="p-2 hover:bg-white/5 rounded-full text-steel"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="relative mb-6">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-steel" />
+              <input 
+                autoFocus
+                type="text"
+                placeholder="Enter Symbol (e.g. TSLA, ETH, NVDA)" 
+                className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-marble focus:ring-2 focus:ring-blue-500/50 outline-none transition-all"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchQuery) {
+                    const next = [...pinnedSymbols];
+                    next[editingIndex] = searchQuery;
+                    setPinnedSymbols(next);
+                    setSearchQuery("");
+                    setEditingIndex(null);
+                  }
+                }}
+              />
+            </div>
+            
+            <div className="flex flex-wrap gap-2 mb-8">
+              {['BTC', 'ETH', 'SOL', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'VIX', 'SPY', 'QQQ'].map(s => (
+                <button 
+                  key={s}
+                  onClick={() => {
+                    const next = [...pinnedSymbols];
+                    next[editingIndex] = s;
+                    setPinnedSymbols(next);
+                    setEditingIndex(null);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 text-xs text-steel hover:text-marble hover:bg-white/10 hover:border-white/10 transition-all font-mono"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+
+            <button 
+              onClick={() => {
+                if (searchQuery) {
+                  const next = [...pinnedSymbols];
+                  next[editingIndex] = searchQuery;
+                  setPinnedSymbols(next);
+                  setSearchQuery("");
+                  setEditingIndex(null);
+                }
+              }}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-blue-500/20"
+            >
+              Update Bubble
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelected }: { title: string, value: string, change: string, isPositive: boolean, rawPrice: number, onClick?: () => void, isSelected?: boolean }) {
+function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelected, onEdit }: { title: string, value: string, change: string, isPositive: boolean, rawPrice: number, onClick?: () => void, isSelected?: boolean, onEdit?: () => void }) {
   const livePrice = useLivePrice(title);
   const displayPrice = livePrice || rawPrice;
   const displayValue = livePrice 
@@ -274,9 +383,23 @@ function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelec
       onClick={onClick}
       className={`true-glass rounded-xl p-4 transition-all hover:-translate-y-0.5 cursor-pointer relative overflow-hidden group 
         ${isFlashActive ? 'ring-1 ring-blue-500/30' : ''} 
-        ${isSelected ? 'bg-white/10 ring-1 ring-white/20' : 'hover:bg-white/5'}
+        ${isSelected ? 'bg-white/10 ring-1 ring-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.5)]' : 'hover:bg-white/5'}
       `}
     >
+      {/* Discrete Edit Button */}
+      {onEdit && (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
+          className="absolute right-2 top-2 z-20 p-1.5 rounded-lg bg-white/5 border border-white/5 text-steel opacity-0 group-hover:opacity-100 transition-all hover:bg-white/10 hover:text-marble shadow-lg"
+          title="Change asset"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+        </button>
+      )}
+
       <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-full group-hover:translate-x-full duration-1000 ease-in-out z-0" />
       
       <div className="relative z-10 pointer-events-none">
