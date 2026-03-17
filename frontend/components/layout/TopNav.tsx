@@ -1,13 +1,14 @@
 "use client";
 
-import { Search, User, Bell, LogIn, LogOut } from "lucide-react";
+import { Bell, LogIn, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { SymbolSearch } from "@/components/features/SymbolSearch";
 import { useWatchlist } from "@/hooks/useWatchlist";
 
 export function TopNav() {
   const { user, isGuest, openAuthModal, logout } = useAuth();
-  const { addSymbol } = useWatchlist();
+  const { addSymbol, symbols } = useWatchlist();
+  const watchlistSymbols = symbols.map((s) => s.symbol.toUpperCase());
 
   return (
     <header className="sticky top-0 z-40 w-full true-glass !border-t-0 !border-l-0 !border-r-0 !rounded-none">
@@ -21,7 +22,7 @@ export function TopNav() {
         </div>
         
         {/* Live Symbol Search */}
-        <SymbolSearch onAddSymbol={addSymbol} />
+        <SymbolSearch onAddSymbol={addSymbol} watchlistSymbols={watchlistSymbols} />
         
         {/* User Actions */}
         <div className="flex items-center gap-5">

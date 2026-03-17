@@ -4,14 +4,22 @@ CONVENTIONS §2: All business logic lives here, NOT in route handlers.
 Routes only call these functions and return their output.
 """
 import logging
+import re
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_, func
 from app.models.user import User
 from app.models.portfolio import Watchlist, watchlist_asset_association
 from app.models.market import Asset
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_user_watchlist(db: AsyncSession, watchlist_id: str, user_id: Any) -> Watchlist | None:
+    result = await db.execute(
+        select(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user_id)
+    )
+    return result.scalars().first()
 
 
 async def get_watchlist_headers(db: AsyncSession, user: User) -> List[Dict[str, Any]]:
@@ -32,8 +40,11 @@ async def create_watchlist(db: AsyncSession, user: User, name: str) -> Dict[str,
     return {"id": str(new_list.id), "name": new_list.name}
 
 
-async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str) -> List[Dict[str, Any]]:
+async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str, user: User) -> List[Dict[str, Any]] | None:
     """Fetch all assets on a specific watchlist."""
+    watchlist = await _get_user_watchlist(db, watchlist_id, user.id)
+    if not watchlist:
+        return None
     result = await db.execute(
         select(Asset)
         .join(watchlist_asset_association, Asset.id == watchlist_asset_association.c.asset_id)
@@ -44,8 +55,12 @@ async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str) -> List[Dic
     return [{"symbol": a.symbol, "name": a.name, "asset_type": a.asset_type} for a in assets]
 
 
-async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str) -> Dict[str, Any]:
+async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, user: User) -> Dict[str, Any]:
     """Add a symbol to a specific watchlist."""
+    watchlist = await _get_user_watchlist(db, watchlist_id, user.id)
+    if not watchlist:
+        return {"error": "watchlist_not_found"}
+
     # Find or create the asset record
     result = await db.execute(select(Asset).where(Asset.symbol == symbol))
     asset = result.scalars().first()
@@ -75,8 +90,12 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str) -> 
     return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": False}
 
 
-async def remove_from_watchlist(db: AsyncSession, watchlist_id: str, symbol: str) -> bool:
+async def remove_from_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, user: User) -> bool:
     """Remove a symbol from a specific watchlist."""
+    watchlist = await _get_user_watchlist(db, watchlist_id, user.id)
+    if not watchlist:
+        return False
+
     result = await db.execute(select(Asset).where(Asset.symbol == symbol))
     asset = result.scalars().first()
     if not asset: return False
@@ -92,10 +111,11 @@ async def remove_from_watchlist(db: AsyncSession, watchlist_id: str, symbol: str
     return delete_result.rowcount > 0
 
 
-async def delete_watchlist(db: AsyncSession, watchlist_id: str) -> bool:
+async def delete_watchlist(db: AsyncSession, watchlist_id: str, user: User) -> bool:
     """Delete an entire watchlist and its asset associations."""
-    # Cascade delete is handled by model relationship, but let's be explicit if needed
-    delete_result = await db.execute(delete(Watchlist).where(Watchlist.id == watchlist_id))
+    delete_result = await db.execute(
+        delete(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user.id)
+    )
     await db.commit()
     return delete_result.rowcount > 0
 
@@ -106,9 +126,16 @@ async def search_symbols(query: str) -> List[Dict[str, str]]:
     Uses a curated local dictionary for instant results without 
     hitting external APIs (avoids Polygon rate limits per CONVENTIONS §7.1).
     """
-    query = query.upper().strip()
+    query = query.strip()
     if len(query) < 1:
         return []
+    query = query[:40]
+    if not re.fullmatch(r"[A-Za-z0-9\-/\.\s]+", query):
+        return []
+
+    normalized = query.upper()
+    normalized = re.sub(r"[/\.\s]+", "-", normalized)
+    normalized = normalized.removesuffix("-USD").removesuffix("-USDT")
 
     # Curated symbol dictionary — covers the most commonly traded assets.
     # Docs: This is intentionally local to avoid rate-limiting on Polygon's
@@ -149,7 +176,44 @@ async def search_symbols(query: str) -> List[Dict[str, str]]:
 
     results = [
         s for s in SYMBOL_DICT
-        if query in s["symbol"] or query in s["name"].upper()
+        if normalized in s["symbol"]
+        or normalized.replace("-", "") in s["symbol"].replace("-", "")
+        or query.lower() in s["name"].lower()
     ]
 
     return results[:10]  # Cap at 10 results to keep responses fast
+
+
+async def search_symbols_db(db: AsyncSession, query: str, limit: int = 15) -> List[Dict[str, str]]:
+    """
+    Canonical symbol search from local DB (no external API calls).
+    Supports exact/prefix symbol and name contains matching.
+    """
+    query = query.strip()
+    if len(query) < 1:
+        return []
+    query = query[:40]
+    if not re.fullmatch(r"[A-Za-z0-9\-/\.\s]+", query):
+        return []
+
+    normalized = query.upper()
+    normalized = re.sub(r"[/\.\s]+", "-", normalized)
+    normalized = normalized.removesuffix("-USD").removesuffix("-USDT")
+    compact = normalized.replace("-", "")
+
+    stmt = (
+        select(Asset)
+        .where(
+            or_(
+                func.upper(Asset.symbol) == normalized,
+                func.upper(Asset.symbol).like(f"{normalized}%"),
+                func.replace(func.upper(Asset.symbol), "-", "").like(f"{compact}%"),
+                func.upper(Asset.name).like(f"%{query.upper()}%"),
+            )
+        )
+        .order_by(func.length(Asset.symbol).asc(), Asset.symbol.asc())
+        .limit(max(1, min(limit, 25)))
+    )
+    result = await db.execute(stmt)
+    assets = result.scalars().all()
+    return [{"symbol": a.symbol, "name": a.name, "type": a.asset_type} for a in assets]

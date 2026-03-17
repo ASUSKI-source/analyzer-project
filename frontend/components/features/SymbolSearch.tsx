@@ -1,58 +1,60 @@
-/**
- * Search bar component with live symbol search and "Add to Watchlist" action.
- * Uses the backend /watchlist/search endpoint (local dictionary, no rate limits).
- * Guests can search but adding triggers auth prompt.
- */
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Search, Plus, X, TrendingUp, Bitcoin } from "lucide-react";
+import { Check, Plus, Search, X } from "lucide-react";
 import { API_BASE_URL } from "@/services/api_client";
-import { useAuth } from "@/contexts/AuthContext";
 
 type SearchResult = {
   symbol: string;
-  name: string;
-  type: string;
 };
 
 type Props = {
   onAddSymbol?: (symbol: string) => Promise<boolean>;
+  watchlistSymbols?: string[];
 };
 
-export function SymbolSearch({ onAddSymbol }: Props) {
-  const { user, openAuthModal } = useAuth();
+export function SymbolSearch({ onAddSymbol, watchlistSymbols = [] }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [addingSymbol, setAddingSymbol] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [justAdded, setJustAdded] = useState<Set<string>>(new Set());
 
-  // Debounced search
   useEffect(() => {
-    if (query.length < 1) {
+    const cleaned = query.trim();
+    if (cleaned.length < 2) {
       setResults([]);
       setIsOpen(false);
       return;
     }
 
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/watchlist/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`${API_BASE_URL}/watchlist/search?q=${encodeURIComponent(cleaned)}`, {
+          signal: controller.signal,
+        });
         if (res.ok) {
           const data = await res.json();
-          setResults(data.results || []);
+          setResults((data.results || []).map((r: any) => ({ symbol: String(r.symbol || "").toUpperCase() })));
+          setIsOpen(true);
+        } else {
+          setResults([]);
           setIsOpen(true);
         }
-      } catch (e) {
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
         console.error("Search failed:", e);
       }
-    }, 200); // 200ms debounce
+    }, 250);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
 
-  // Click outside to close
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -63,8 +65,6 @@ export function SymbolSearch({ onAddSymbol }: Props) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  const [addedSymbols, setAddedSymbols] = useState<Set<string>>(new Set());
-
   const handleAdd = async (symbol: string) => {
     if (!onAddSymbol) return;
 
@@ -73,12 +73,12 @@ export function SymbolSearch({ onAddSymbol }: Props) {
     setAddingSymbol(null);
     
     if (success) {
-      setAddedSymbols(prev => new Set(prev).add(symbol));
-      setTimeout(() => setAddedSymbols(prev => {
+      setJustAdded(prev => new Set(prev).add(symbol));
+      setTimeout(() => setJustAdded(prev => {
         const next = new Set(prev);
         next.delete(symbol);
         return next;
-      }), 1500);
+      }), 1400);
     }
   };
 
@@ -137,23 +137,27 @@ export function SymbolSearch({ onAddSymbol }: Props) {
           {results.map((r) => (
             <div
               key={r.symbol}
-              className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors group cursor-default"
+              className="flex items-center justify-between px-4 py-2.5 hover:bg-white/5 transition-colors group cursor-default"
             >
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${r.type === "crypto" ? "bg-amber-500/10 text-amber-400" : "bg-blue-500/10 text-blue-400"}`}>
-                  {r.type === "crypto" ? <Bitcoin className="w-4 h-4" /> : <TrendingUp className="w-4 h-4" />}
-                </div>
-                <div>
-                  <span className="text-sm font-bold text-marble font-mono">{r.symbol}</span>
-                  <p className="text-xs text-steel">{r.name}</p>
-                </div>
-              </div>
+              <span className="text-sm font-semibold text-marble font-mono tracking-wide">{r.symbol}</span>
               <button
-                onClick={() => handleAdd(r.symbol)}
-                disabled={addingSymbol === r.symbol || addedSymbols.has(r.symbol)}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-100 ${addedSymbols.has(r.symbol) ? 'bg-green-500/10 text-green-400' : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 md:opacity-0 md:group-hover:opacity-100'}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAdd(r.symbol);
+                }}
+                disabled={addingSymbol === r.symbol || watchlistSymbols.includes(r.symbol)}
+                className={`h-6 w-6 rounded-md border flex items-center justify-center transition-all ${
+                  watchlistSymbols.includes(r.symbol) || justAdded.has(r.symbol)
+                    ? "border-green-400/40 bg-green-500/10 text-green-300"
+                    : "border-white/15 bg-white/[0.03] text-slate-300 hover:bg-white/[0.08] hover:text-marble"
+                }`}
+                title={watchlistSymbols.includes(r.symbol) ? "Already in watchlist" : `Add ${r.symbol}`}
               >
-                {addedSymbols.has(r.symbol) ? '✓' : addingSymbol === r.symbol ? '...' : <Plus className="w-3.5 h-3.5" />}
+                {watchlistSymbols.includes(r.symbol) || justAdded.has(r.symbol)
+                  ? <Check className="w-3.5 h-3.5" />
+                  : addingSymbol === r.symbol
+                    ? <span className="text-[10px]">..</span>
+                    : <Plus className="w-3.5 h-3.5" />}
               </button>
             </div>
           ))}

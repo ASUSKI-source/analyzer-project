@@ -54,9 +54,8 @@ async def _resolve_symbols(
         from app.services.watchlist import get_watchlist_headers
         headers = await get_watchlist_headers(db, current_user)
         if headers:
-            # Use the first one (usually 'Default')
-            symbol_data = await get_watchlist_symbols(db, current_user, headers[0].id)
-            resolved = [item.symbol for item in symbol_data.symbols]
+            symbol_data = await get_watchlist_symbols(db, headers[0]["id"], current_user)
+            resolved = [item["symbol"] for item in (symbol_data or []) if isinstance(item, dict) and item.get("symbol")]
         else:
             resolved = []
     return resolved[:20]

@@ -22,7 +22,8 @@ from app.services.watchlist import (
     add_to_watchlist,
     remove_from_watchlist,
     delete_watchlist,
-    search_symbols
+    search_symbols,
+    search_symbols_db,
 )
 
 router = APIRouter()
@@ -54,25 +55,20 @@ async def create_new_watchlist(
     return await create_watchlist(db, current_user, payload.name)
 
 
-@router.get("/{watchlist_id}", response_model=WatchlistSymbolsResponse)
-async def get_watchlist_content(
-    watchlist_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+@router.get("/search")
+async def search_tickers(
+    q: str = "",
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get all symbols for a specific watchlist."""
-    # Note: In a real app, verify watchlist belongs to current_user
-    symbols = await get_watchlist_symbols(db, watchlist_id)
-    
-    # Need to fetch the list name for the response
-    # For now, we'll just return the symbols. 
-    # Logic in service can be expanded if name is required here.
-    return {
-        "id": watchlist_id,
-        "name": "Watchlist", # Placeholder or fetch from DB
-        "symbols": symbols,
-        "count": len(symbols)
-    }
+    """
+    Search for ticker symbols by name or symbol.
+    Uses canonical DB symbols first, then local dictionary fallback.
+    """
+    db_results = await search_symbols_db(db, q)
+    if db_results:
+        return {"results": db_results, "count": len(db_results)}
+    results = await search_symbols(q)
+    return {"results": results, "count": len(results)}
 
 
 @router.post("/{watchlist_id}/symbols", status_code=status.HTTP_201_CREATED)
@@ -87,8 +83,29 @@ async def add_symbol_to_list(
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol is required")
     
-    result = await add_to_watchlist(db, watchlist_id, symbol.upper())
+    result = await add_to_watchlist(db, watchlist_id, symbol.upper(), current_user)
+    if result.get("error") == "watchlist_not_found":
+        raise HTTPException(status_code=404, detail="Watchlist not found")
     return result
+
+
+@router.get("/{watchlist_id}", response_model=WatchlistSymbolsResponse)
+async def get_watchlist_content(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all symbols for a specific watchlist."""
+    symbols = await get_watchlist_symbols(db, watchlist_id, current_user)
+    if symbols is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    return {
+        "id": watchlist_id,
+        "name": "Watchlist",
+        "symbols": symbols,
+        "count": len(symbols)
+    }
 
 
 @router.delete("/{watchlist_id}/symbols/{symbol}")
@@ -99,7 +116,7 @@ async def remove_symbol_from_list(
     db: AsyncSession = Depends(get_db)
 ):
     """Remove a symbol from a specific watchlist."""
-    removed = await remove_from_watchlist(db, watchlist_id, symbol.upper())
+    removed = await remove_from_watchlist(db, watchlist_id, symbol.upper(), current_user)
     if not removed:
         raise HTTPException(status_code=404, detail="Symbol not found in this watchlist")
     return {"status": "removed"}
@@ -112,16 +129,7 @@ async def delete_user_watchlist(
     db: AsyncSession = Depends(get_db)
 ):
     """Delete an entire watchlist."""
-    success = await delete_watchlist(db, watchlist_id)
+    success = await delete_watchlist(db, watchlist_id, current_user)
     return {"status": "deleted" if success else "failed"}
 
 
-@router.get("/search")
-async def search_tickers(q: str = ""):
-    """
-    Search for ticker symbols by name or symbol.
-    No auth required — safe for guests to use.
-    Uses local dictionary for instant results (no external API calls).
-    """
-    results = await search_symbols(q)
-    return {"results": results, "count": len(results)}
