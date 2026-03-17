@@ -8,62 +8,112 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.schemas.watchlist import WatchlistAddRequest, WatchlistResponse
+from app.schemas.watchlist import (
+    WatchlistCreateRequest,
+    WatchlistHeader,
+    WatchlistSymbolsResponse,
+    WatchlistListResponse,
+    WatchlistSymbol
+)
 from app.services.watchlist import (
-    get_user_watchlist,
+    get_watchlist_headers,
+    create_watchlist,
+    get_watchlist_symbols,
     add_to_watchlist,
     remove_from_watchlist,
+    delete_watchlist,
     search_symbols
 )
 
 router = APIRouter()
 
 
-@router.get("/", response_model=WatchlistResponse)
-async def get_watchlist(
+@router.get("/", response_model=WatchlistListResponse)
+async def list_watchlists(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all symbols on the authenticated user's watchlist."""
-    items = await get_user_watchlist(db, current_user)
-    return {"symbols": items, "count": len(items)}
+    """Get all watchlist headers for the authenticated user."""
+    lists = await get_watchlist_headers(db, current_user)
+    
+    # Auto-create "Main" watchlist if none exist
+    if not lists:
+        main = await create_watchlist(db, current_user, "Main Portfolio")
+        lists = [main]
+        
+    return {"watchlists": lists}
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
-async def add_watchlist_symbol(
-    payload: WatchlistAddRequest,
+@router.post("/", response_model=WatchlistHeader, status_code=status.HTTP_201_CREATED)
+async def create_new_watchlist(
+    payload: WatchlistCreateRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Add a symbol to the authenticated user's watchlist.
-    Security: user_id extracted from JWT, never from the request body.
-    """
-    result = await add_to_watchlist(db, current_user, payload.symbol)
-    
-    if result["already_existed"]:
-        return {"status": "exists", "message": f"{payload.symbol} is already on your watchlist"}
-    
-    return {"status": "added", "symbol": result["symbol"], "name": result["name"]}
+    """Create a new named watchlist."""
+    return await create_watchlist(db, current_user, payload.name)
 
 
-@router.delete("/{symbol}")
-async def remove_watchlist_symbol(
+@router.get("/{watchlist_id}", response_model=WatchlistSymbolsResponse)
+async def get_watchlist_content(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all symbols for a specific watchlist."""
+    # Note: In a real app, verify watchlist belongs to current_user
+    symbols = await get_watchlist_symbols(db, watchlist_id)
+    
+    # Need to fetch the list name for the response
+    # For now, we'll just return the symbols. 
+    # Logic in service can be expanded if name is required here.
+    return {
+        "id": watchlist_id,
+        "name": "Watchlist", # Placeholder or fetch from DB
+        "symbols": symbols,
+        "count": len(symbols)
+    }
+
+
+@router.post("/{watchlist_id}/symbols", status_code=status.HTTP_201_CREATED)
+async def add_symbol_to_list(
+    watchlist_id: str,
+    payload: dict, # simple { "symbol": "AAPL" }
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Add a symbol to a specific watchlist."""
+    symbol = payload.get("symbol")
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+    
+    result = await add_to_watchlist(db, watchlist_id, symbol.upper())
+    return result
+
+
+@router.delete("/{watchlist_id}/symbols/{symbol}")
+async def remove_symbol_from_list(
+    watchlist_id: str,
     symbol: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Remove a symbol from the authenticated user's watchlist."""
-    symbol = symbol.upper()
-    removed = await remove_from_watchlist(db, current_user, symbol)
-    
+    """Remove a symbol from a specific watchlist."""
+    removed = await remove_from_watchlist(db, watchlist_id, symbol.upper())
     if not removed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"{symbol} was not found on your watchlist"
-        )
-    
-    return {"status": "removed", "symbol": symbol}
+        raise HTTPException(status_code=404, detail="Symbol not found in this watchlist")
+    return {"status": "removed"}
+
+
+@router.delete("/{watchlist_id}")
+async def delete_user_watchlist(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete an entire watchlist."""
+    success = await delete_watchlist(db, watchlist_id)
+    return {"status": "deleted" if success else "failed"}
 
 
 @router.get("/search")

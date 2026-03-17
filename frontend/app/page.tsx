@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2, Settings2, Search } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2, Settings2, Search, ChevronDown, Plus } from "lucide-react";
 import { ChartWidget } from "@/components/features/ChartWidget";
 import { useDashboardPulse, MarketQuote } from "@/hooks/useDashboardPulse";
 import { useAuth } from "@/contexts/AuthContext";
@@ -14,7 +14,8 @@ import { AnalysisReportPanel } from "@/components/features/AnalysisReportPanel";
 export default function Home() {
   const { data, loading, refreshing, lastUpdated, error } = useDashboardPulse();
   const { user, isGuest, loading: authLoading, updateUser } = useAuth();
-  const { symbols: userSymbols, addSymbol, removeSymbol } = useWatchlist();
+  const { watchlists, symbols: userSymbols, addSymbol, removeSymbol, activeId, setActiveId, createWatchlist } = useWatchlist();
+  const [isWatchlistDropdownOpen, setIsWatchlistDropdownOpen] = useState(false);
   const [customPrices, setCustomPrices] = useState<MarketQuote[]>([]);
   const [selectedAsset, setSelectedAsset] = useState<string>("BTC");
   const [chartDays, setChartDays] = useState<number>(365);
@@ -240,12 +241,49 @@ export default function Home() {
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-50" />
             
             <div className="flex items-center justify-between mb-6 relative sticky top-[-32px] z-20 bg-[#06090e]/95 sm:-mx-0 sm:px-0 sm:py-0 sm:relative sm:bg-transparent -mx-4 px-4 py-3 backdrop-blur-xl border-b border-white/5 sm:border-none rounded-t-2xl sm:rounded-none">
-              <h2 className="text-lg font-semibold text-marble flex items-center gap-2">
-                Watchlist
-                <span className={`flex h-2 w-2 rounded-full ${loading ? 'bg-steel animate-pulse' : 'bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]'}`}></span>
-              </h2>
-              <button className="text-xs tracking-wider uppercase font-semibold text-blue-400 hover:text-blue-300 hover:tracking-widest transition-all p-2 -mr-2 sm:p-0 sm:-mr-0">
-                View All
+              <div className="relative group/dropdown">
+                <button 
+                  className="text-lg font-semibold text-marble flex items-center gap-2 hover:text-blue-400 transition-colors"
+                  onClick={() => setIsWatchlistDropdownOpen(!isWatchlistDropdownOpen)}
+                >
+                  {watchlists.find(l => l.id === activeId)?.name || 'Watchlist'}
+                  <ChevronDown className={`w-4 h-4 transition-transform ${isWatchlistDropdownOpen ? 'rotate-180' : ''}`} />
+                  <span className={`flex h-2 w-2 rounded-full ${loading ? 'bg-steel animate-pulse' : 'bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]'}`}></span>
+                </button>
+
+                {isWatchlistDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-56 true-glass border border-white/10 rounded-xl shadow-2xl py-2 z-[60] animate-in slide-in-from-top-2 duration-200">
+                    {watchlists.map(list => (
+                      <button
+                        key={list.id}
+                        onClick={() => {
+                          setActiveId(list.id);
+                          setIsWatchlistDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between ${activeId === list.id ? 'text-blue-400 bg-white/5' : 'text-steel hover:text-marble hover:bg-white/5'}`}
+                      >
+                        {list.name}
+                        {activeId === list.id && <span className="w-1 h-1 rounded-full bg-blue-400" />}
+                      </button>
+                    ))}
+                    <div className="h-px bg-white/5 my-2" />
+                    <button
+                      onClick={() => {
+                        const name = prompt("Enter Watchlist Name:");
+                        if (name) createWatchlist(name);
+                        setIsWatchlistDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-blue-400 hover:text-blue-300 hover:bg-white/5 flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Create New Watchlist
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button className="p-2 -mr-2 text-steel hover:text-marble hover:bg-white/5 rounded-lg transition-all" title="Watchlist Settings">
+                <Settings2 className="w-4 h-4" />
               </button>
             </div>
             

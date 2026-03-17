@@ -7,18 +7,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import re
 
 
-class WatchlistAddRequest(BaseModel):
-    """Input validation for adding a symbol to a user's watchlist."""
-    symbol: str = Field(..., min_length=1, max_length=10, description="Ticker symbol to add")
+class WatchlistCreateRequest(BaseModel):
+    """Input validation for creating a new watchlist."""
+    name: str = Field(..., min_length=1, max_length=50, description="Name of the new watchlist")
 
-    @field_validator("symbol")
-    @classmethod
-    def sanitize_symbol(cls, v: str) -> str:
-        """Security: Only allow alphanumeric symbols + hyphens, uppercase normalized."""
-        v = v.strip().upper()
-        if not re.match(r"^[A-Z0-9\-]+$", v):
-            raise ValueError("Symbol must be alphanumeric (e.g. AAPL, BTC-USD)")
-        return v
+
+class WatchlistHeader(BaseModel):
+    """Basic metadata for a watchlist."""
+    id: str
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WatchlistSymbol(BaseModel):
@@ -30,7 +29,14 @@ class WatchlistSymbol(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class WatchlistResponse(BaseModel):
-    """Full watchlist payload for a user."""
+class WatchlistSymbolsResponse(BaseModel):
+    """Symbols payload for a specific watchlist."""
+    id: str
+    name: str
     symbols: List[WatchlistSymbol]
     count: int
+
+
+class WatchlistListResponse(BaseModel):
+    """List of all watchlists for a user."""
+    watchlists: List[WatchlistHeader]
