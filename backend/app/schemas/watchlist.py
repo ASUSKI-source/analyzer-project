@@ -12,6 +12,11 @@ class WatchlistCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="Name of the new watchlist")
 
 
+class AddSymbolRequest(BaseModel):
+    """Input validation for adding a symbol to a watchlist."""
+    symbol: str = Field(..., min_length=1, max_length=20, description="Ticker symbol to add")
+
+
 class WatchlistHeader(BaseModel):
     """Basic metadata for a watchlist."""
     id: str

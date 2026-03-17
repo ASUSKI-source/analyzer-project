@@ -8,13 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user
 from app.models.user import User
+import logging
 from app.schemas.watchlist import (
     WatchlistCreateRequest,
+    AddSymbolRequest,
     WatchlistHeader,
     WatchlistSymbolsResponse,
     WatchlistListResponse,
     WatchlistSymbol
 )
+
+logger = logging.getLogger(__name__)
 from app.services.watchlist import (
     get_watchlist_headers,
     create_watchlist,
@@ -74,19 +78,22 @@ async def search_tickers(
 @router.post("/{watchlist_id}/symbols", status_code=status.HTTP_201_CREATED)
 async def add_symbol_to_list(
     watchlist_id: str,
-    payload: dict, # simple { "symbol": "AAPL" }
+    payload: AddSymbolRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Add a symbol to a specific watchlist."""
-    symbol = payload.get("symbol")
-    if not symbol:
-        raise HTTPException(status_code=400, detail="Symbol is required")
-    
-    result = await add_to_watchlist(db, watchlist_id, symbol.upper(), current_user)
-    if result.get("error") == "watchlist_not_found":
-        raise HTTPException(status_code=404, detail="Watchlist not found")
-    return result
+    try:
+        result = await add_to_watchlist(db, watchlist_id, payload.symbol.upper().strip(), current_user)
+        if result.get("error") == "watchlist_not_found":
+            raise HTTPException(status_code=404, detail="Watchlist not found or access denied")
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("add_symbol_to_list failed watchlist=%s symbol=%s user=%s: %s",
+                     watchlist_id, payload.symbol, current_user.id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to add symbol — please try again")
 
 
 @router.get("/{watchlist_id}", response_model=WatchlistSymbolsResponse)
