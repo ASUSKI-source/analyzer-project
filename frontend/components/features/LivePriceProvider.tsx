@@ -109,7 +109,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
     };
 
     wsRef.current = ws;
-  }, [flushPrices]);
+  }, [flushTicks]);
 
   useEffect(() => {
     connect();
