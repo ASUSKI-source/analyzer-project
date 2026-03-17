@@ -116,18 +116,28 @@ async def get_live_intraday_history(symbol: str, days: int):
     cache_key = f"intraday_cache:{symbol_upper}:{days}"
     cached_data = await cache_client.get(cache_key)
     if cached_data:
-        return cached_data
+        # If it's the new tuple format [data, interval], return it
+        if isinstance(cached_data, list) and len(cached_data) == 2 and isinstance(cached_data[1], int):
+            return cached_data
+        # Legacy cache compatibility: default to a reasonable interval if old data found
+        return cached_data, 300 if days <= 1 else 3600
 
     chart_data = []
+    interval_seconds = 3600 # default
     try:
         from app.services.coingecko import is_crypto, SYMBOL_TO_BINANCE
         
         if is_crypto(symbol_upper):
             # ... (Binance logic stays same as it doesn't hit our Polygon limit)
             b_id = SYMBOL_TO_BINANCE.get(symbol_upper)
-            if not b_id: return []
+            if not b_id: return [], 0
             
             interval, limit = ("5m", 288) if days <= 1 else ("1h", 168) if days <= 7 else ("4h", 180) if days <= 30 else ("1d", min(days, 1000))
+            
+            # Map interval string to seconds
+            interval_map = {"5m": 300, "1h": 3600, "4h": 14400, "1d": 86400}
+            interval_seconds = interval_map.get(interval, 3600)
+
             url = "https://api.binance.us/api/v3/klines"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 res = await client.get(url, params={"symbol": b_id, "interval": interval, "limit": limit})
@@ -140,16 +150,20 @@ async def get_live_intraday_history(symbol: str, days: int):
             priority = 2 if days <= 1 else 1
             if not await PolygonRateLimiter.acquire_token(priority=priority):
                 logger.warning(f"Throttling live intraday for {symbol_upper} to preserve API tokens.")
-                return []
+                return [], 0
 
             if days <= 1:
                 multiplier, timespan, lookback, limit_candles = (5, "minute", 4, 180)
+                interval_seconds = 300
             elif days <= 7:
                 multiplier, timespan, lookback, limit_candles = (1, "hour", 10, 168)
+                interval_seconds = 3600
             elif days <= 30:
                 multiplier, timespan, lookback, limit_candles = (4, "hour", 40, 180)
+                interval_seconds = 14400
             else:
                 multiplier, timespan, lookback, limit_candles = (1, "day", days + 10, days)
+                interval_seconds = 86400
 
             end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=lookback)
@@ -169,13 +183,13 @@ async def get_live_intraday_history(symbol: str, days: int):
         
         # Save to Heat Cache
         if chart_data:
-            await cache_client.set(cache_key, chart_data, expire_seconds=300)
+            await cache_client.set(cache_key, [chart_data, interval_seconds], expire_seconds=300)
 
     except Exception as e:
         logger.error(f"Live Intraday error for {symbol_upper}: {e}")
-        return []
+        return [], 0
 
-    return chart_data
+    return chart_data, interval_seconds
 
 
 async def get_asset_history(
@@ -228,7 +242,7 @@ async def get_asset_history(
             logger.warning(f"Refresh requested for {symbol} but throttled due to {reason}.")
 
     # 1. Provide Real-time Intraday accuracy for lower timeframe selections
-    live_intraday = await get_live_intraday_history(symbol, days)
+    live_intraday, interval_seconds = await get_live_intraday_history(symbol, days)
     if live_intraday and len(live_intraday) > 0:
         if return_meta:
             latest_ts = live_intraday[-1]["time"] if live_intraday else None
@@ -238,12 +252,17 @@ async def get_asset_history(
                 "as_of": as_of,
                 "staleness_seconds": 0,
                 "is_stale": False,
+                "interval_seconds": interval_seconds,
             }
         return live_intraday
         
     # Validate the asset exists
     result = await db.execute(select(Asset).where(Asset.symbol == symbol))
     asset = result.scalars().first()
+    
+    # Map timeframe to seconds for metadata
+    timeframe_map = {"5m": 300, "1h": 3600, "1d": 86400, "1w": 604800}
+    db_interval = timeframe_map.get(timeframe, 86400)
     
     db_candles = []
     stale_db_candles = []
@@ -309,6 +328,7 @@ async def get_asset_history(
             "as_of": latest_ts.isoformat(),
             "staleness_seconds": staleness_seconds,
             "is_stale": staleness_seconds > strict_threshold,
+            "interval_seconds": db_interval,
         }
     else:
         # Fallback to realistic generated dummy data.
@@ -357,6 +377,7 @@ async def get_asset_history(
             "as_of": datetime.now(timezone.utc).isoformat(),
             "staleness_seconds": None,
             "is_stale": True,
+            "interval_seconds": 86400,
         }
 
     if return_meta:

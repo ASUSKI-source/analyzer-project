@@ -155,6 +155,7 @@ async def get_history(
         "as_of": meta.get("as_of"),
         "staleness_seconds": meta.get("staleness_seconds"),
         "is_stale": meta.get("is_stale"),
+        "interval_seconds": meta.get("interval_seconds"),
     }
 
 

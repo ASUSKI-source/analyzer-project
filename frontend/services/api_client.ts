@@ -17,10 +17,10 @@ export async function fetchAssetHistory(symbol: string, days: number = 365, refr
     }
 
     const json = await response.json();
-    if (json.status === "success" && Array.isArray(json.data)) {
-      return json.data;
+    if (json.status === "success") {
+      return json;
     }
-    return [];
+    return null;
   } catch (err) {
     console.error("Network error when fetching history:", err);
     return [];

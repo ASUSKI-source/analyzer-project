@@ -17,7 +17,7 @@ interface TickData {
 }
 
 interface LivePriceContextType {
-  prices: Record<string, number>;
+  ticks: Record<string, TickData>;
   subscribe: (symbol: string) => void;
   unsubscribe: (symbol: string) => void;
   isConnected: boolean;
@@ -26,29 +26,29 @@ interface LivePriceContextType {
 const LivePriceContext = createContext<LivePriceContextType | undefined>(undefined);
 
 export function LivePriceProvider({ children }: { children: React.ReactNode }) {
-  const [prices, setPrices] = useState<Record<string, number>>({});
+  const [ticks, setTicks] = useState<Record<string, TickData>>({});
   const [isConnected, setIsConnected] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
   const subsRef = useRef<Set<string>>(new Set());
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // High-frequency price buffer to avoid React re-render thrashing
-  const pendingPricesRef = useRef<Record<string, number>>({});
+  // High-frequency tick buffer to avoid React re-render thrashing
+  const pendingTicksRef = useRef<Record<string, TickData>>({});
   const flushRequestRef = useRef<number | null>(null);
 
-  const flushPrices = useCallback((): void => {
-    if (Object.keys(pendingPricesRef.current).length === 0) {
+  const flushTicks = useCallback((): void => {
+    if (Object.keys(pendingTicksRef.current).length === 0) {
       flushRequestRef.current = null;
       return;
     }
 
-    setPrices((prev) => ({
+    setTicks((prev) => ({
       ...prev,
-      ...pendingPricesRef.current,
+      ...pendingTicksRef.current,
     }));
     
-    pendingPricesRef.current = {};
+    pendingTicksRef.current = {};
     flushRequestRef.current = null;
   }, []);
 
@@ -78,14 +78,21 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
           const { symbol, data } = msg;
           // Support multiple provider formats (Finnhub 'price', Polygon 'c', etc.)
           const price = data.price || data.c || data.p;
+          const volume = data.volume || data.v || data.s || 0;
+          const timestamp = data.timestamp || data.t || Date.now();
           
           if (price) {
-            // Buffer the price update
-            pendingPricesRef.current[symbol] = price;
+            // Buffer the tick update
+            pendingTicksRef.current[symbol] = {
+              p: price,
+              s: volume,
+              t: timestamp,
+              sym: symbol
+            };
             
             // Schedule a flush if one isn't already pending
             if (!flushRequestRef.current) {
-                flushRequestRef.current = requestAnimationFrame(flushPrices);
+                flushRequestRef.current = requestAnimationFrame(flushTicks);
             }
           }
         }
@@ -134,7 +141,7 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <LivePriceContext.Provider value={{ prices, subscribe, unsubscribe, isConnected }}>
+    <LivePriceContext.Provider value={{ ticks, subscribe, unsubscribe, isConnected }}>
       {children}
     </LivePriceContext.Provider>
   );
@@ -154,5 +161,22 @@ export function useLivePrice(symbol?: string) {
     }
   }, [symbol, context]);
 
-  return symbol ? context.prices[symbol.toUpperCase()] : undefined;
+  return symbol ? context.ticks[symbol.toUpperCase()]?.p : undefined;
+}
+
+export function useLiveTick(symbol?: string) {
+  const context = useContext(LivePriceContext);
+  if (!context) {
+    throw new Error("useLiveTick must be used within a LivePriceProvider");
+  }
+
+  useEffect(() => {
+    if (symbol) {
+      const sym = symbol.toUpperCase();
+      context.subscribe(sym);
+      return () => context.unsubscribe(sym);
+    }
+  }, [symbol, context]);
+
+  return symbol ? context.ticks[symbol.toUpperCase()] : undefined;
 }

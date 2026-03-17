@@ -61,6 +61,7 @@ class AssetHistoryResponse(BaseModel):
     as_of: Optional[str] = None
     staleness_seconds: Optional[int] = None
     is_stale: Optional[bool] = None
+    interval_seconds: Optional[int] = None
 
 class TechnicalIndicators(BaseModel):
     """
