@@ -132,11 +132,15 @@ async def get_live_intraday_history(symbol: str, days: int):
             b_id = SYMBOL_TO_BINANCE.get(symbol_upper)
             if not b_id: return [], 0
             
-            interval, limit = ("5m", 288) if days <= 1 else ("1h", 168) if days <= 7 else ("4h", 180) if days <= 30 else ("1d", min(days, 1000))
-            
-            # Map interval string to seconds
-            interval_map = {"5m": 300, "1h": 3600, "4h": 14400, "1d": 86400}
-            interval_seconds = interval_map.get(interval, 3600)
+            # Refined Intervals: 1D -> 1m, 1W -> 30m
+            if days <= 1:
+                interval, limit, interval_seconds = ("1m", 1440, 60)
+            elif days <= 7:
+                interval, limit, interval_seconds = ("30m", 336, 1800)
+            elif days <= 30:
+                interval, limit, interval_seconds = ("4h", 180, 14400)
+            else:
+                interval, limit, interval_seconds = ("1d", min(days, 1000), 86400)
 
             url = "https://api.binance.us/api/v3/klines"
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -152,18 +156,15 @@ async def get_live_intraday_history(symbol: str, days: int):
                 logger.warning(f"Throttling live intraday for {symbol_upper} to preserve API tokens.")
                 return [], 0
 
+            # Refined Intervals: 1D -> 1m, 1W -> 30m
             if days <= 1:
-                multiplier, timespan, lookback, limit_candles = (5, "minute", 4, 180)
-                interval_seconds = 300
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (1, "minute", 1, 1440, 60)
             elif days <= 7:
-                multiplier, timespan, lookback, limit_candles = (1, "hour", 10, 168)
-                interval_seconds = 3600
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (30, "minute", 8, 336, 1800)
             elif days <= 30:
-                multiplier, timespan, lookback, limit_candles = (4, "hour", 40, 180)
-                interval_seconds = 14400
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (4, "hour", 40, 180, 14400)
             else:
-                multiplier, timespan, lookback, limit_candles = (1, "day", days + 10, days)
-                interval_seconds = 86400
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (1, "day", days + 10, days, 86400)
 
             end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=lookback)

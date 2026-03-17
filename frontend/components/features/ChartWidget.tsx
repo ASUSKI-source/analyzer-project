@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createChart, ColorType, IChartApi, ISeriesApi, Time, CandlestickSeries, HistogramSeries, UTCTimestamp } from "lightweight-charts";
 import { fetchAssetHistory } from "@/services/api_client";
-import { TrendingUp, RefreshCw } from "lucide-react";
+import { TrendingUp, RefreshCw, Radio } from "lucide-react";
 import { useLiveTick } from "./LivePriceProvider";
 
 export function ChartWidget({ 
@@ -21,6 +21,7 @@ export function ChartWidget({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const intervalSecondsRef = useRef<number>(86400);
+  const lastBarRef = useRef<any>(null);
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,27 +32,29 @@ export function ChartWidget({
       const isDaily = intervalSecondsRef.current >= 86400;
       const interval = intervalSecondsRef.current;
       
-      // Get the last data point from the series
-      // Note: we can't easily get 'data' from seriesRef.current in standard types,
-      // but 'update' handled it. However, to roll, we need to KNOW the last bar's time.
-      // We'll track the last bar time in a ref to be safe.
-      
-      const lastBar = (seriesRef.current as any)._lastBar; 
-      // Note: Hacky, but lightweight-charts doesn't expose public 'data' getter on series.
-      // Better way: Track lastBar in a Ref.
-
+      const lastBar = lastBarRef.current;
       if (!lastBar) return;
 
+      // Normalize tick and last bar times to seconds
       const tickTime = Math.floor(liveTick.t / 1000);
-      const lastTime = typeof lastBar.time === 'number' ? lastBar.time : new Date(lastBar.time).getTime() / 1000;
+      let lastTime: number;
+      
+      if (typeof lastBar.time === 'number') {
+        lastTime = lastBar.time;
+      } else {
+        // Handle ISO string or YYYY-MM-DD
+        const date = new Date(lastBar.time);
+        lastTime = Math.floor(date.getTime() / 1000);
+      }
       
       const isNewBar = tickTime >= lastTime + interval;
 
       if (isNewBar) {
         // Roll to a new bar
+        const normalizedTickTime = Math.floor(tickTime / interval) * interval;
         const newTime = isDaily 
-          ? new Date(tickTime * 1000).toISOString().split('T')[0]
-          : Math.floor(tickTime / interval) * interval;
+          ? new Date(normalizedTickTime * 1000).toISOString().split('T')[0]
+          : (normalizedTickTime as UTCTimestamp);
           
         const newBar = {
           time: newTime as Time,
@@ -61,7 +64,7 @@ export function ChartWidget({
           close: liveTick.p,
         };
         seriesRef.current.update(newBar);
-        (seriesRef.current as any)._lastBar = newBar;
+        lastBarRef.current = newBar;
 
         if (volumeSeriesRef.current) {
           volumeSeriesRef.current.update({
@@ -79,13 +82,13 @@ export function ChartWidget({
           low: Math.min(lastBar.low, liveTick.p),
         };
         seriesRef.current.update(updatedBar);
-        (seriesRef.current as any)._lastBar = updatedBar;
+        lastBarRef.current = updatedBar;
 
         if (volumeSeriesRef.current) {
           volumeSeriesRef.current.update({
-            ...lastBar,
             time: lastBar.time as Time,
             value: (lastBar.value || 0) + liveTick.s,
+            color: updatedBar.close >= updatedBar.open ? "rgba(16, 185, 129, 0.2)" : "rgba(244, 63, 94, 0.2)"
           });
         }
       }
@@ -108,6 +111,7 @@ export function ChartWidget({
       timeScale: {
         borderColor: "rgba(255, 255, 255, 0.1)",
         timeVisible: true,
+        secondsVisible: false,
       },
       rightPriceScale: {
         borderColor: "rgba(255, 255, 255, 0.1)",
@@ -164,16 +168,15 @@ export function ChartWidget({
           const data = response.data;
           intervalSecondsRef.current = response.interval_seconds || 86400;
 
-          const sorted = [...data].sort((a, b) => {
-            const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
-            const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
-            return timeA - timeB;
-          });
+          // Helper to get numeric timestamp for sorting
+          const getTs = (t: string | number) => typeof t === 'number' ? t : Math.floor(new Date(t).getTime() / 1000);
+
+          const sorted = [...data].sort((a, b) => getTs(a.time) - getTs(b.time));
           
           candleSeries.setData(sorted as any);
           
           // Store the last bar for live updates
-          (candleSeries as any)._lastBar = sorted[sorted.length - 1];
+          lastBarRef.current = sorted[sorted.length - 1];
           
           const volData = sorted.map(d => ({
             time: d.time as Time,
@@ -204,6 +207,19 @@ export function ChartWidget({
 
   return (
     <div className="relative flex-1 w-full h-full min-h-[250px]">
+      {/* Live Indicator Overlay */}
+      {!loading && !error && (
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
+          <div className="relative flex h-2 w-2">
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${liveTick ? 'bg-emerald-400' : 'bg-red-400'} opacity-75`}></span>
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${liveTick ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+          </div>
+          <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
+            {liveTick ? 'Live Feed' : 'Waiting for Data'}
+          </span>
+        </div>
+      )}
+
       {loading && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm rounded-xl">
           <RefreshCw className="w-8 h-8 text-blue-400 animate-spin mb-4" />

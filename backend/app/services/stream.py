@@ -96,11 +96,18 @@ class FinnhubStreamer(BaseStreamer):
             return False
 
     async def _send_subscription(self, symbol: str):
-        """Internal helper to send subscription message."""
+        """Internal helper to send subscription message with provider-specific symbol mapping."""
         if self._ws:
-            payload = {"type": "subscribe", "symbol": symbol}
+            # Map simple symbols to Finnhub formats if needed
+            # For Stocks, it's usually just the symbol (e.g., AAPL)
+            # For Crypto, Finnhub free tier likes 'BINANCE:BTCUSDT'
+            target_symbol = symbol
+            if symbol in ["BTC", "ETH", "SOL", "DOGE"]:
+                target_symbol = f"BINANCE:{symbol}USDT"
+            
+            payload = {"type": "subscribe", "symbol": target_symbol}
             await self._ws.send(json.dumps(payload))
-            logger.info(f"Subscribed to {symbol} on Finnhub.")
+            logger.info(f"Subscribed to {symbol} (as {target_symbol}) on Finnhub.")
 
     async def subscribe(self, symbol: str):
         """External call to track and subscribe to a symbol."""
@@ -114,7 +121,12 @@ class FinnhubStreamer(BaseStreamer):
         if symbol in self.active_symbols:
             self.active_symbols.remove(symbol)
             if self._ws:
-                payload = {"type": "unsubscribe", "symbol": symbol}
+                # Map back to provider format for unsubscribe
+                target_symbol = symbol
+                if symbol in ["BTC", "ETH", "SOL", "DOGE"]:
+                    target_symbol = f"BINANCE:{symbol}USDT"
+                    
+                payload = {"type": "unsubscribe", "symbol": target_symbol}
                 await self._ws.send(json.dumps(payload))
                 logger.info(f"Unsubscribed from {symbol} on Finnhub.")
 
@@ -148,15 +160,23 @@ class FinnhubStreamer(BaseStreamer):
         Finnhub format: [{'p': price, 's': symbol, 't': timestamp, 'v': volume}]
         """
         for trade in trades:
-            symbol = trade['s']
+            raw_symbol = trade['s']
             price = trade['p']
             timestamp = trade['t']
+            volume = trade.get('v', 0)
+            
+            # Map back provider symbol to our internal symbol
+            # (e.g. 'BINANCE:BTCUSDT' -> 'BTC')
+            symbol = raw_symbol
+            if raw_symbol.startswith("BINANCE:") and raw_symbol.endswith("USDT"):
+                symbol = raw_symbol.replace("BINANCE:", "").replace("USDT", "")
             
             # Normalize to our 'tick' format
             normalized = {
                 "symbol": symbol,
                 "price": price,
                 "timestamp": timestamp,
+                "volume": volume,
                 "type": "tick"
             }
             await self.broadcast(symbol, normalized)
