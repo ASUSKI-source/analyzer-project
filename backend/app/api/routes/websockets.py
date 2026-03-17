@@ -18,13 +18,25 @@ async def websocket_endpoint(websocket: WebSocket):
     Main entry point for the frontend's real-time price feed.
     """
     # Security: Origin Validation
-    origin = websocket.headers.get("origin")
-    allowed_origin = settings.FRONTEND_URL
+    origin = websocket.headers.get("origin", "")
+    allowed_origin = settings.FRONTEND_URL or ""
 
-    # In development, we might allow localhost variations
-    if allowed_origin and origin and origin != allowed_origin:
-        if not ("localhost" in origin and "localhost" in allowed_origin):
-            logger.warning(f"Blocked WebSocket connection from unauthorized origin: {origin}")
+    # Normalize origins for comparison
+    def normalize(o: str): 
+        return o.lower().rstrip("/").replace("https://", "").replace("http://", "")
+
+    norm_origin = normalize(origin)
+    norm_allowed = normalize(allowed_origin)
+
+    # In development or Railway, we allow matching base domains
+    is_allowed = not norm_allowed or norm_origin == norm_allowed
+    
+    if not is_allowed:
+        # Fallback: Allow if both are local variations
+        is_local = ("localhost" in norm_origin or "127.0.0.1" in norm_origin) and \
+                   ("localhost" in norm_allowed or "127.0.0.1" in norm_allowed)
+        if not is_local:
+            logger.warning(f"Blocked WebSocket connection from unauthorized origin: {origin} (Expected: {allowed_origin})")
             await websocket.close(code=1008)
             return
 
@@ -47,6 +59,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     await manager.subscribe(websocket, symbol)
                 elif msg_type == "UNSUBSCRIBE":
                     await manager.unsubscribe(websocket, symbol)
+                elif msg_type == "PING":
+                    await websocket.send_json({"type": "PONG"})
 
             except Exception as e:
                 logger.error(f"Error handling WebSocket message: {e}")

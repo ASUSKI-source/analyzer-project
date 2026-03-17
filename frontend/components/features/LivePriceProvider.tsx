@@ -58,6 +58,8 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
     console.log("[LivePriceProvider] Connecting to:", WS_BASE_URL);
     const ws = new WebSocket(WS_BASE_URL);
 
+    let heartbeatInterval: NodeJS.Timeout;
+
     ws.onopen = () => {
       console.log("[LivePriceProvider] Connected.");
       setIsConnected(true);
@@ -69,11 +71,20 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+
+      // Start heartbeat to keep connection alive on Railway
+      heartbeatInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "PING" }));
+        }
+      }, 15000);
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        if (msg.type === "PONG") return; // Heartbeat response
+
         if (msg.type === "TICK") {
           const { symbol, data } = msg;
           const price = data.price || data.c || data.p;
@@ -106,9 +117,19 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
 
     ws.onclose = () => {
       setIsConnected(false);
-      console.warn("[LivePriceProvider] Disconnected.");
-      // Reconnection can be handled by the caller or a future enhancement.
-      // For now, avoid self-recursive reconnect logic to keep typing simple.
+      clearInterval(heartbeatInterval);
+      console.warn("[LivePriceProvider] Disconnected. Reconnecting in 5s...");
+      
+      // Auto-reconnect
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect();
+      }, 5000);
+    };
+
+    ws.onerror = (err) => {
+      console.error("[LivePriceProvider] WebSocket Error:", err);
+      ws.close();
     };
 
     wsRef.current = ws;
@@ -117,8 +138,12 @@ export function LivePriceProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     connect();
     return () => {
-      if (wsRef.current) wsRef.current.close();
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (wsRef.current) {
+        // Prevent reconnect on unmount
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        wsRef.current.onclose = null; 
+        wsRef.current.close();
+      }
       if (flushRequestRef.current) cancelAnimationFrame(flushRequestRef.current);
     };
   }, [connect]);
@@ -182,4 +207,11 @@ export function useLiveTick(symbol?: string) {
   }, [symbol, context]);
 
   return symbol ? context.ticks[symbol.toUpperCase()] : undefined;
+}
+export function useLiveConnection() {
+  const context = useContext(LivePriceContext);
+  if (!context) {
+    throw new Error("useLiveConnection must be used within a LivePriceProvider");
+  }
+  return context.isConnected;
 }

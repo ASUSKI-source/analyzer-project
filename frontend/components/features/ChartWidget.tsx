@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createChart, ColorType, IChartApi, ISeriesApi, Time, CandlestickSeries, HistogramSeries, UTCTimestamp } from "lightweight-charts";
 import { fetchAssetHistory } from "@/services/api_client";
 import { TrendingUp, RefreshCw, Radio } from "lucide-react";
-import { useLiveTick } from "./LivePriceProvider";
+import { useLiveTick, useLiveConnection } from "./LivePriceProvider";
 
 export function ChartWidget({ 
   symbol = "AAPL", 
@@ -16,6 +16,7 @@ export function ChartWidget({
   refreshKey?: number;
 }) {
   const liveTick = useLiveTick(symbol);
+  const isSocketConnected = useLiveConnection();
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -209,14 +210,30 @@ export function ChartWidget({
     <div className="relative flex-1 w-full h-full min-h-[250px]">
       {/* Live Indicator Overlay */}
       {!loading && !error && (
-        <div className="absolute top-4 right-4 z-20 flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
-          <div className="relative flex h-2 w-2">
-            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${liveTick ? 'bg-emerald-400' : 'bg-red-400'} opacity-75`}></span>
-            <span className={`relative inline-flex rounded-full h-2 w-2 ${liveTick ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+        <div className="absolute top-4 right-4 z-20 flex flex-col items-end gap-2">
+          {/* Socket Status */}
+          <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
+            <div className="relative flex h-2 w-2">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSocketConnected ? 'bg-blue-400' : 'bg-amber-400'} opacity-75`}></span>
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${isSocketConnected ? 'bg-blue-500' : 'bg-amber-500'}`}></span>
+            </div>
+            <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
+              {isSocketConnected ? 'Socket: Connected' : 'Socket: Connecting...'}
+            </span>
           </div>
-          <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
-            {liveTick ? 'Live Feed' : 'Waiting for Data'}
-          </span>
+
+          {/* Data Stream Status */}
+          <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
+            <div className="relative flex h-2 w-2">
+              {liveTick && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              )}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${liveTick ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+            </div>
+            <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
+              {liveTick ? 'Stream: Live' : 'Stream: Waiting'}
+            </span>
+          </div>
         </div>
       )}
 

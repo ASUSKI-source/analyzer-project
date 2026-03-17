@@ -106,6 +106,7 @@ class ConnectionManager:
                         # Find all clients watching this symbol
                         listeners = self.symbol_subscriptions.get(symbol, set())
                         if listeners:
+                            logger.debug(f"[Relay] Pushing {symbol} update to {len(listeners)} clients")
                             # Push to all connected clients
                             dead_clients = []
                             for client in listeners:
