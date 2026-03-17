@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { LandingAuth } from "@/components/auth/LandingAuth";
 import { API_BASE_URL } from "@/services/api_client";
 import { useWatchlist } from "@/hooks/useWatchlist";
+import { useLivePrice } from "@/components/features/LivePriceProvider";
 import { AnalysisReportPanel } from "@/components/features/AnalysisReportPanel";
 
 export default function Home() {
@@ -250,18 +251,23 @@ export default function Home() {
 }
 
 function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelected }: { title: string, value: string, change: string, isPositive: boolean, rawPrice: number, onClick?: () => void, isSelected?: boolean }) {
+  const livePrice = useLivePrice(title);
+  const displayPrice = livePrice || rawPrice;
+  const displayValue = livePrice 
+    ? (livePrice > 1000 ? `$${livePrice.toLocaleString(undefined, {minimumFractionDigits: 2})}` : `$${livePrice.toFixed(livePrice < 5 ? 4 : 2)}`)
+    : value;
+
   const [isFlashActive, setIsFlashActive] = useState(false);
-  // Initialize to null so the first real data arrival triggers a pulse
   const prevValue = React.useRef<number | null>(null);
 
   useEffect(() => {
-    if (rawPrice > 0 && prevValue.current !== rawPrice) {
+    if (displayPrice > 0 && prevValue.current !== displayPrice) {
       setIsFlashActive(true);
       const timer = setTimeout(() => setIsFlashActive(false), 800);
-      prevValue.current = rawPrice;
+      prevValue.current = displayPrice;
       return () => clearTimeout(timer);
     }
-  }, [rawPrice]);
+  }, [displayPrice]);
 
   return (
     <div 
@@ -276,7 +282,7 @@ function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelec
       <div className="relative z-10 pointer-events-none">
         <p className="text-xs text-steel tracking-wider mb-2 font-mono uppercase">{title}</p>
         <p className={`text-xl font-bold mb-1 transition-all duration-300 ${isFlashActive ? 'text-blue-400 scale-[1.02]' : 'text-marble'}`}>
-          {value}
+          {displayValue}
         </p>
         <div className={`flex items-center gap-1 text-sm font-medium ${isPositive ? "text-positive" : "text-negative"}`}>
           {isPositive ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
@@ -288,22 +294,28 @@ function StatCard({ title, value, change, isPositive, rawPrice, onClick, isSelec
 }
 
 function WatchlistItem({ symbol, name, price, change, isPositive, rawPrice, onClick, isSelected, onRemove }: { symbol: string, name: string, price: string, change: string, isPositive: boolean, rawPrice: number, onClick?: () => void, isSelected?: boolean, onRemove?: () => void }) {
+  const livePrice = useLivePrice(symbol);
+  const displayPrice = livePrice || rawPrice;
+  const displayPriceStr = livePrice
+    ? (livePrice > 1000 ? `$${livePrice.toLocaleString(undefined, {minimumFractionDigits: 2})}` : livePrice < 5 ? `$${livePrice.toFixed(4)}` : `$${livePrice.toFixed(2)}`)
+    : price;
+
   const [sentiment, setSentiment] = React.useState<{ score: number; topics: string[] } | null>(null);
   const [isFlashActive, setIsFlashActive] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
-  // Initialize to null so the first real data arrival triggers a pulse
   const prevPrice = React.useRef<number | null>(null);
   
   React.useEffect(() => {
-    if (rawPrice > 0 && prevPrice.current !== rawPrice) {
+    if (displayPrice > 0 && prevPrice.current !== displayPrice) {
       setIsFlashActive(true);
       const timer = setTimeout(() => setIsFlashActive(false), 800);
-      prevPrice.current = rawPrice;
+      prevPrice.current = displayPrice;
       return () => clearTimeout(timer);
     }
-  }, [rawPrice]);
+  }, [displayPrice]);
 
   React.useEffect(() => {
+    // ... sentiment logic stays same
     let cancelled = false;
     fetch(`${API_BASE_URL}/market/assets/${symbol}/sentiment`)
       .then(r => r.ok ? r.json() : null)
@@ -356,7 +368,7 @@ function WatchlistItem({ symbol, name, price, change, isPositive, rawPrice, onCl
 
       <div className="flex flex-col items-end gap-1 z-10 w-1/4 text-right">
         <span className={`font-mono font-bold transition-all duration-300 ${isFlashActive ? 'text-blue-400 scale-105' : 'text-marble'}`}>
-          {price}
+          {displayPriceStr}
         </span>
         <span className={`text-xs font-medium ${isPositive ? "text-positive" : "text-negative"}`}>
           {change}
@@ -367,21 +379,24 @@ function WatchlistItem({ symbol, name, price, change, isPositive, rawPrice, onCl
 }
 
 function PriceBubble({ symbol, price }: { symbol: string, price: number }) {
+  const livePrice = useLivePrice(symbol);
+  const displayPrice = livePrice || price;
+
   const [isFlashActive, setIsFlashActive] = useState(false);
   const prevPrice = React.useRef<number | null>(null);
 
   useEffect(() => {
-    if (price > 0 && prevPrice.current !== price) {
+    if (displayPrice > 0 && prevPrice.current !== displayPrice) {
       setIsFlashActive(true);
       const timer = setTimeout(() => setIsFlashActive(false), 800);
-      prevPrice.current = price;
+      prevPrice.current = displayPrice;
       return () => clearTimeout(timer);
     }
-  }, [price]);
+  }, [displayPrice]);
 
   return (
     <div className={`px-3 py-1 rounded-full border transition-all duration-300 font-mono text-xs font-bold ${isFlashActive ? 'bg-blue-500/20 border-blue-400/50 text-blue-400 scale-110' : 'bg-white/5 border-white/10 text-marble'}`}>
-      ${price > 0 ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+      ${displayPrice > 0 ? displayPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
     </div>
   );
 }
