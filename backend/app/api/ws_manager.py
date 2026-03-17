@@ -75,6 +75,29 @@ class ConnectionManager:
                 # Last person left? Unsubscribe from provider to save resources.
                 await streamer.unsubscribe(symbol)
 
+    async def broadcast_direct(self, symbol: str, data: dict):
+        """
+        Push a tick directly to all connected clients for a symbol.
+        Used as a fallback/bypass for Redis PubSub.
+        """
+        listeners = self.symbol_subscriptions.get(symbol.upper(), set())
+        if not listeners:
+            return
+
+        dead_clients = []
+        for client in listeners:
+            try:
+                await client.send_json({
+                    "type": "TICK",
+                    "symbol": symbol.upper(),
+                    "data": data
+                })
+            except Exception:
+                dead_clients.append(client)
+        
+        for dead in dead_clients:
+            self.disconnect(dead)
+
     async def _redis_relay_loop(self):
         """
         Background task that listens to ALL price updates in Redis 

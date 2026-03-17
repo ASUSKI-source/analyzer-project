@@ -7,6 +7,11 @@ import websockets
 from app.core.config import settings
 from app.core.cache import get_redis
 
+# Delayed import to avoid circular dependency
+def get_ws_manager():
+    from app.api.ws_manager import manager
+    return manager
+
 logger = logging.getLogger(__name__)
 
 class BaseStreamer(ABC):
@@ -59,10 +64,21 @@ class BaseStreamer(ABC):
         pass
 
     async def broadcast(self, symbol: str, data: Dict[str, Any]):
-        """Publish normalized data to Redis."""
+        """Publish normalized data to Redis AND direct to local subscribers."""
+        # 1. Redis Relay (for multi-instance scalability)
         if self._redis:
             channel = f"ticker:{symbol}"
-            await self._redis.publish(channel, json.dumps(data))
+            try:
+                await self._redis.publish(channel, json.dumps(data))
+            except Exception as e:
+                logger.error(f"Redis publish failed: {e}")
+
+        # 2. Direct Relay (Fallback/Bypass for single-instance robustness)
+        try:
+            manager = get_ws_manager()
+            await manager.broadcast_direct(symbol, data)
+        except Exception as e:
+            logger.error(f"Direct broadcast failed: {e}")
 
 class FinnhubStreamer(BaseStreamer):
     """
@@ -181,6 +197,8 @@ class FinnhubStreamer(BaseStreamer):
             if ":" in raw_symbol:
                 clean_symbol = raw_symbol.split(":")[-1]
             
+            logger.info(f"[Stream] Trade received for {clean_symbol}: ${price}")
+
             # Check if this "clean" symbol is one of our mapped ones
             symbol = INVERSE_BINANCE.get(clean_symbol, clean_symbol)
             # Handle some common suffix removals if not in mapping
