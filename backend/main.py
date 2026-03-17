@@ -19,14 +19,15 @@ app = FastAPI(title="Stocks/Crypto AI Analyzer")
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 
-# Set up CORS for the Next.js frontend
-# IMPORTANT: The CORS spec forbids allow_origins=["*"] with allow_credentials=True.
-# Using allow_origin_regex to match all origins while still echoing back the specific
-# requesting origin, which is required when credentials (cookies/auth headers) are involved.
+# Set up CORS for the Next.js frontend.
+# The app uses JWT Bearer tokens in Authorization headers — no cookies — so
+# allow_credentials=False + allow_origins=["*"] is correct and simpler.
+# This also ensures Access-Control-Allow-Origin: * is stamped on ALL responses
+# (including 500s) so browser CORS blocks never mask backend errors.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

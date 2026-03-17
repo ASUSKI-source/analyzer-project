@@ -9,6 +9,7 @@ import uuid as _uuid
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, func
+from sqlalchemy.exc import IntegrityError
 from app.models.user import User
 from app.models.portfolio import Watchlist, watchlist_asset_association
 from app.models.market import Asset
@@ -82,9 +83,18 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, use
     if not asset:
         crypto_symbols = {"BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "DOT", "AVAX", "MATIC", "LINK", "SHIB", "LTC", "BCH", "UNI", "NEAR", "ATOM", "APT", "ARB", "OP", "TIA", "INJ", "RENDER", "FET", "PEPE", "BONK", "SUI", "SEI", "WIF"}
         is_crypto = symbol.upper() in crypto_symbols or "-" in symbol
-        asset = Asset(symbol=symbol, name=symbol, asset_type="crypto" if is_crypto else "stock")
-        db.add(asset)
-        await db.flush()
+        new_asset = Asset(symbol=symbol, name=symbol, asset_type="crypto" if is_crypto else "stock")
+        db.add(new_asset)
+        try:
+            await db.flush()
+            asset = new_asset
+        except IntegrityError:
+            # Another request created this asset concurrently — roll back and re-fetch.
+            await db.rollback()
+            result2 = await db.execute(select(Asset).where(Asset.symbol == symbol))
+            asset = result2.scalars().first()
+            if not asset:
+                raise
 
     # Check if already on this specific watchlist
     existing = await db.execute(
@@ -97,10 +107,16 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, use
     if existing.first():
         return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": True}
 
-    await db.execute(
-        watchlist_asset_association.insert().values(watchlist_id=watchlist.id, asset_id=asset.id)
-    )
-    await db.commit()
+    try:
+        await db.execute(
+            watchlist_asset_association.insert().values(watchlist_id=watchlist.id, asset_id=asset.id)
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        # Duplicate association inserted concurrently — treat as success.
+        return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": True}
+
     return {"symbol": asset.symbol, "name": asset.name, "asset_type": asset.asset_type, "already_existed": False}
 
 
