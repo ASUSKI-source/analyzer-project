@@ -209,34 +209,6 @@ export function ChartWidget({
 
   return (
     <div className="relative flex-1 w-full h-full min-h-[250px]">
-      {/* Live Indicator Overlay */}
-      {!loading && !error && (
-        <div className="absolute bottom-1 right-2 z-20 flex items-center gap-3 opacity-40 hover:opacity-100 transition-opacity duration-300 pointer-events-none hover:pointer-events-auto">
-          {/* Socket Status */}
-          <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
-            <div className="relative flex h-2 w-2">
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSocketConnected ? 'bg-blue-400' : 'bg-amber-400'} opacity-75`}></span>
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${isSocketConnected ? 'bg-blue-500' : 'bg-amber-500'}`}></span>
-            </div>
-            <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
-              {isSocketConnected ? 'Socket: Connected' : 'Socket: Connecting...'}
-            </span>
-          </div>
-
-          {/* Data Stream Status */}
-          <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/5 ring-1 ring-white/5 shadow-xl transition-all duration-300">
-            <div className="relative flex h-2 w-2">
-              {liveTick && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${liveTick ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-            </div>
-            <span className="text-[10px] font-bold tracking-widest uppercase text-marble/60">
-              {liveTick ? 'Stream: Live' : 'Stream: Waiting'}
-            </span>
-          </div>
-        </div>
-      )}
 
       {loading && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm rounded-xl">
