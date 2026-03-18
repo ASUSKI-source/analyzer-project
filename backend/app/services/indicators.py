@@ -120,7 +120,11 @@ async def get_cached_indicators(
     if not candles:
         try:
             from app.services.market_data import get_live_intraday_history
-            candles = await get_live_intraday_history(symbol, days=days)
+            res = await get_live_intraday_history(symbol, days=days)
+            if isinstance(res, tuple) and len(res) == 2:
+                candles, _ = res
+            else:
+                candles = res
         except Exception as e:
             logger.warning(f"Failed to fetch candles for cached indicators ({symbol}, {timeframe}): {e}")
             return None
