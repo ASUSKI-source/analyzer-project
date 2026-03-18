@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -385,12 +385,12 @@ async def _assemble_data_context(
             asyncio.gather(*wrapped_tasks, return_exceptions=True),
             timeout=max(0.5, budget_seconds),
         )
-        prices             = results[0] if not isinstance(results[0], Exception) else []
-        ti_batch           = results[1] if not isinstance(results[1], Exception) else {}
-        fundamentals_batch = results[2] if not isinstance(results[2], Exception) else []
-        news_batch         = results[3] if not isinstance(results[3], Exception) else []
-        inst_batch         = results[4] if not isinstance(results[4], Exception) and len(results) > 4 else []
-        onchain_batch      = results[5] if not isinstance(results[5], Exception) and len(results) > 5 else []
+        prices             = results[0] if len(results) > 0 and not isinstance(results[0], Exception) else []
+        ti_batch           = results[1] if len(results) > 1 and not isinstance(results[1], Exception) else {}
+        fundamentals_batch = results[2] if len(results) > 2 and not isinstance(results[2], Exception) else []
+        news_batch         = results[3] if len(results) > 3 and not isinstance(results[3], Exception) else []
+        inst_batch         = results[4] if len(results) > 4 and not isinstance(results[4], Exception) else []
+        onchain_batch      = results[5] if len(results) > 5 and not isinstance(results[5], Exception) else []
     except asyncio.TimeoutError:
         logger.warning(
             f"{log_prefix} assembly timed out at {budget_seconds:.2f}s for symbols={symbols}. "
@@ -401,7 +401,7 @@ async def _assemble_data_context(
 
     # 3. Collate per-asset context
     price_map = {p["symbol"]: p for p in prices if isinstance(p, dict) and "symbol" in p} if isinstance(prices, list) else {}
-    stale_price_count = 0
+    stale_price_count: int = 0
     
     assets = []
     for i, sym in enumerate(symbols):
@@ -412,7 +412,7 @@ async def _assemble_data_context(
         asset["price"] = price_data.get("price", 0)
         asset["change_percent"] = price_data.get("changePercent", 0)
         if price_data.get("is_stale") or str(price_data.get("source", "")).startswith("db_"):
-            stale_price_count += 1
+            stale_price_count = int(stale_price_count) + 1
 
         # Technicals: snapshot-first + provider fallback merge
         snapshot_for_symbol = snapshot_bundle.get(sym, {}) if isinstance(snapshot_bundle, dict) else {}
@@ -483,11 +483,11 @@ async def _assemble_data_context(
                     tf_payload.get(k) is not None
                     for k in ("trend_signal", "rsi_14", "ema_9", "ema_21", "sma_50", "sma_200")
                 ):
-                    symbol_covered += 1
-            coverage_by_symbol[symbol] = round(symbol_covered / max(1, len(required_timeframes)), 3)
-            covered_timeframes += symbol_covered
+                    symbol_covered = int(symbol_covered) + 1
+            coverage_by_symbol[symbol] = round(float(symbol_covered) / max(1.0, float(len(required_timeframes))), 3)
+            covered_timeframes = int(covered_timeframes) + int(symbol_covered)
         stage_metrics["technical_timeframe_coverage_ratio"] = round(
-            covered_timeframes / max(1, expected_timeframes), 3
+            float(covered_timeframes) / max(1.0, float(expected_timeframes)), 3
         )
         stage_metrics["technical_coverage_by_symbol"] = coverage_by_symbol
     if assets:
@@ -662,7 +662,7 @@ Provide your analysis following the output format specified in your system instr
             text = await _post_messages(
                 system_prompt=_MASTER_PROMPT,
                 content=user_message,
-                max_tokens=1200,
+                max_tokens=2000,
                 step_name="primary",
             )
 
@@ -695,7 +695,7 @@ Provide your analysis following the output format specified in your system instr
                 formatted_text = await _post_messages(
                     system_prompt="You are a strict JSON formatter.",
                     content=f"{formatter_prompt}\n\nANALYSIS_TEXT:\n{text}",
-                    max_tokens=900,
+                    max_tokens=2000,
                     step_name="formatter_retry",
                 )
                 parsed_retry, retry_parse_mode = _parse_ai_json_response_with_mode(
@@ -723,6 +723,10 @@ Provide your analysis following the output format specified in your system instr
                 "change_percent": asset.get("change_percent"),
                 "technicals": asset.get("technicals", {}),
                 "fundamentals": asset.get("fundamentals", {}),
+                "on_chain": asset.get("on_chain", {}),
+                "institutional": asset.get("institutional", {}),
+                "short_interest": asset.get("short_interest", {}),
+                "derivatives": asset.get("derivatives", {}),
             }
             mini_prompt = (
                 "Given the following single-asset snapshot (price, 1h/1d/1w technicals, and fundamentals), "
@@ -736,7 +740,7 @@ Provide your analysis following the output format specified in your system instr
                 text = await _post_messages(
                     system_prompt="You are a concise, strictly-JSON-generating single-asset analyst.",
                     content=content,
-                    max_tokens=350,
+                    max_tokens=500,
                     step_name=f"asset_{sym}",
                 )
                 parsed, parse_mode = _parse_ai_json_response_with_mode(
@@ -808,7 +812,7 @@ Follow the output schema described in your system instructions."""
         text = await _post_messages(
             system_prompt=_MASTER_PROMPT,
             content=user_message,
-            max_tokens=1250,
+            max_tokens=2500,
             step_name="portfolio_synthesis",
         )
 
@@ -834,7 +838,7 @@ Follow the output schema described in your system instructions."""
                 if normalized_assets:
                     parsed["assets"] = normalized_assets
             parsed["_model_meta"] = dict(model_meta)
-            return parsed
+            return cast(Dict[str, Any], parsed)
 
         logger.warning(
             "%s portfolio synthesis output was not valid JSON. Falling back to mock report.",
@@ -924,27 +928,94 @@ def _parse_ai_json_response_with_mode(
     if _seconds_remaining(parse_deadline) <= 0:
         return None, "budget_exhausted"
 
+def _try_load(text: str) -> Optional[Dict[str, Any]]:
+    """Helper for safe JSON loading within multi-pass parser."""
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _repair_json_truncation(json_str: str) -> str:
+    """
+    Attempt to close an obviously truncated JSON string by balancing braces/brackets.
+    """
+    s = json_str.strip()
+    if not s:
+        return s
+
+    # Remove trailing fragments like ',"assets":' or ',"key":'
+    s = re.sub(r',?\s*["\w]+"?\s*:\s*[^,}\]]*$', "", s)
+    s = s.rstrip(",")
+
+    stack = []
+    in_string = False
+    escape = False
+
+    for char in s:
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if char in "{[":
+                stack.append(char)
+            elif char in "}]":
+                if stack:
+                    opp = "{" if char == "}" else "["
+                    if stack[-1] == opp:
+                        stack.pop()
+
+    while stack:
+        opener = stack.pop()
+        s += "}" if opener == "{" else "]"
+
+    return s
+
+
+def _parse_ai_json_response_with_mode(
+    text: str, parse_budget_seconds: float = 1.0, log_prefix: str = ""
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    if not text:
+        return None, "empty"
+
+    # Attempt 1: Direct try
+    parsed = _try_load(text)
+    if parsed is not None:
+        return parsed, "valid"
+
     # Attempt 2: markdown fenced JSON
     import re
-
     fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
     if fenced:
         parsed_fenced = _try_load(fenced.group(1))
         if parsed_fenced is not None:
             return parsed_fenced, "fenced"
-    if _seconds_remaining(parse_deadline) <= 0:
-        return None, "budget_exhausted"
 
     # Attempt 3: bracket window extraction
     start_idx = text.find("{")
     end_idx = text.rfind("}")
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        window = text[start_idx : end_idx + 1]
-        parsed_window = _try_load(window)
-        if parsed_window is not None:
-            return parsed_window, "window"
-
-        # Attempt 4: deterministic normalization for common model artifacts
+    
+    # If we find at least a start, try to recover
+    if start_idx != -1:
+        if end_idx != -1 and end_idx > start_idx:
+            window = text[start_idx : end_idx + 1]
+            p_win = _try_load(window)
+            if p_win is not None:
+                return p_win, "window"
+        else:
+            # Only start found? Maybe truncated. Use from start to end of string
+            window = text[start_idx:]
+            
+        # Attempt 4: Deterministic normalization
         normalized = (
             window.replace("\u201c", '"')
             .replace("\u201d", '"')
@@ -956,10 +1027,17 @@ def _parse_ai_json_response_with_mode(
         normalized = re.sub(r"\bNone\b", "null", normalized)
         normalized = re.sub(r",\s*([}\]])", r"\1", normalized)  # trailing commas
 
-        parsed_normalized = _try_load(normalized)
-        if parsed_normalized is not None:
+        p_norm = _try_load(normalized)
+        if p_norm is not None:
             logger.info("%s recovered non-JSON AI output via normalization", log_prefix)
-            return parsed_normalized, "normalized"
+            return p_norm, "normalized"
+
+        # Attempt 5: Repairing truncation
+        repaired = _repair_json_truncation(normalized)
+        p_rep = _try_load(repaired)
+        if p_rep is not None:
+            logger.info("%s recovered truncated JSON output via repair", log_prefix)
+            return p_rep, "repaired"
 
     return None, "failed"
 
@@ -988,7 +1066,7 @@ def _sanitize_error_message(message: str) -> str:
     sanitized = re.sub(r"([?&](?:token|api[_-]?key|x-api-key)=)[^&\\s]+", r"\1<redacted>", sanitized, flags=re.I)
     # collapse whitespace for concise logging
     sanitized = re.sub(r"\s+", " ", sanitized).strip()
-    return sanitized[:400]
+    return str(sanitized)[:400]
 
 
 def _generate_mock_report(symbols: List[str], data_context: Dict[str, Any], error_reason: Optional[str] = None) -> Dict[str, Any]:
@@ -1137,10 +1215,10 @@ def _assess_report_quality(report: Dict[str, Any], data_context: Dict[str, Any])
                 has_any_core = True
                 break
         if has_any_core:
-            technical_ready_count += 1
+            technical_ready_count = int(technical_ready_count) + 1
 
     total_assets = len(assets)
-    technical_coverage_ratio = technical_ready_count / max(1, total_assets)
+    technical_coverage_ratio = float(technical_ready_count) / max(1, total_assets)
     insight = str(report.get("overall_insight", "")).lower()
     missing_data_phrase = (
         "without robust technical" in insight
@@ -1153,7 +1231,7 @@ def _assess_report_quality(report: Dict[str, Any], data_context: Dict[str, Any])
         "reject_as_low_confidence": reject,
         "reason": "all_neutral_with_missing_data_claim" if reject else "accepted",
         "all_neutral": all_neutral,
-        "technical_coverage_ratio": round(technical_coverage_ratio, 3),
+        "technical_coverage_ratio": round(float(technical_coverage_ratio), 3),
     }
 
 
@@ -1256,7 +1334,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             cleaned_list = [_strip_nulls(i) for i in obj if i is not None]
             return [i for i in cleaned_list if i != {} and i != []]
         if isinstance(obj, float):
-            return round(obj, 2)
+            return round(float(obj), 2)
         return obj
 
     assets = context.get("assets", [])
@@ -1280,8 +1358,10 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             if chg:
                 pa["change_percent"] = round(float(chg), 2)
 
-        # Technicals — strip nulls, cap timeframes, filter fields by watchlist size
+            # Technicals — strip nulls, cap timeframes, filter fields by watchlist size
         raw_tech = asset.get("technicals", {})
+        if not isinstance(raw_tech, dict):
+            raw_tech = {}
         pruned_tech: Dict[str, Any] = {}
         allowed_fields = core_tf_fields if symbol_count > 4 else full_tf_fields
         for tf in keep_tfs:
@@ -1289,9 +1369,9 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(tf_data, dict):
                 continue
             slim = {
-                k: (round(v, 2) if isinstance(v, float) else v)
+                k: (round(float(v), 2) if isinstance(v, (int, float)) else v)
                 for k, v in tf_data.items()
-                if k in allowed_fields and v is not None
+                if isinstance(allowed_fields, set) and k in allowed_fields and v is not None
             }
             if slim:
                 pruned_tech[tf] = slim
@@ -1302,7 +1382,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
         raw_fund = asset.get("fundamentals", {})
         if isinstance(raw_fund, dict):
             clean_fund = {
-                k: (round(v, 2) if isinstance(v, float) else v)
+                k: (round(v, 2) if isinstance(v, (int, float)) else v)
                 for k, v in raw_fund.items()
                 if v is not None and k != "description"
             }
@@ -1322,7 +1402,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             if pruned_news:
                 pa["news_sentiment"] = pruned_news
 
-        # Extra data layers — pass through if present
+        # Extra data layers
         for extra_key in ("on_chain", "derivatives", "short_interest", "institutional"):
             extra = asset.get(extra_key)
             if extra and isinstance(extra, dict):
