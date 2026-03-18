@@ -181,6 +181,21 @@ export function ChartWidget({
           }));
           volumeSeriesRef.current?.setData(volData);
           chartRef.current?.timeScale().fitContent();
+
+          // Force immediate sync with live tick if available (Prevents stale history vs StatCard mismatch)
+          if (liveTick && seriesRef.current && lastBarRef.current) {
+            const isDaily = intervalSecondsRef.current >= 86400;
+            const normalizedTickTime = Math.floor(Math.floor(liveTick.t / 1000) / intervalSecondsRef.current) * intervalSecondsRef.current;
+            const tickDate = isDaily ? new Date(normalizedTickTime * 1000).toISOString().split('T')[0] : (normalizedTickTime as UTCTimestamp);
+            
+            seriesRef.current.update({
+              time: tickDate as Time,
+              open: lastBarRef.current.open,
+              high: Math.max(lastBarRef.current.high, liveTick.p),
+              low: Math.min(lastBarRef.current.low, liveTick.p),
+              close: liveTick.p
+            });
+          }
         } else {
           setError(`No history for ${symbol}`);
         }

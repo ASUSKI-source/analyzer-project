@@ -558,7 +558,7 @@ function PriceBubble({ symbol, price }: { symbol: string, price: number }) {
 
   return (
     <div className={`px-3 py-1 rounded-full border transition-all duration-300 font-mono text-xs font-bold ${isFlashActive ? 'bg-blue-500/20 border-blue-400/50 text-blue-400 scale-110' : 'bg-white/5 border-white/10 text-marble'}`}>
-      ${displayPrice > 0 ? displayPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+      ${displayPrice > 0 ? (displayPrice > 1000 ? displayPrice.toLocaleString(undefined, {minimumFractionDigits: 2}) : displayPrice.toFixed(displayPrice < 5 ? 4 : 2)) : '—'}
     </div>
   );
 }
