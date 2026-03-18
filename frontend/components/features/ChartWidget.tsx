@@ -96,6 +96,7 @@ export function ChartWidget({
     }
   }, [liveTick, loading]);
 
+  // 1. Chart Instance Initialization (Once)
   useEffect(() => {
     if (!chartContainerRef.current) return;
     
@@ -119,16 +120,8 @@ export function ChartWidget({
       },
       crosshair: {
         mode: 0,
-        vertLine: {
-            color: 'rgba(56, 189, 248, 0.5)',
-            width: 1,
-            style: 3,
-        },
-        horzLine: {
-            color: 'rgba(56, 189, 248, 0.5)',
-            width: 1,
-            style: 3,
-        },
+        vertLine: { color: 'rgba(56, 189, 248, 0.5)', width: 1, style: 3 },
+        horzLine: { color: 'rgba(56, 189, 248, 0.5)', width: 1, style: 3 },
       },
       autoSize: true,
     });
@@ -143,23 +136,28 @@ export function ChartWidget({
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
       color: "rgba(56, 189, 248, 0.2)",
-      priceFormat: {
-        type: "volume",
-      },
+      priceFormat: { type: "volume" },
       priceScaleId: "",
     });
     
     volumeSeries.priceScale().applyOptions({
       visible: false,
-      scaleMargins: {
-        top: 0.8,
-        bottom: 0,
-      },
+      scaleMargins: { top: 0.8, bottom: 0 },
     });
 
     chartRef.current = chart;
     seriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // 2. Data Fetching (On symbol/days/refreshKey change)
+  useEffect(() => {
+    if (!seriesRef.current || !volumeSeriesRef.current || !chartRef.current) return;
 
     const loadData = async (isRefreshed: boolean = false) => {
       setLoading(true);
@@ -170,14 +168,10 @@ export function ChartWidget({
           const data = response.data;
           intervalSecondsRef.current = response.interval_seconds || 86400;
 
-          // Helper to get numeric timestamp for sorting
           const getTs = (t: string | number) => typeof t === 'number' ? t : Math.floor(new Date(t).getTime() / 1000);
-
           const sorted = [...data].sort((a, b) => getTs(a.time) - getTs(b.time));
           
-          candleSeries.setData(sorted as any);
-          
-          // Store the last bar for live updates
+          seriesRef.current?.setData(sorted as any);
           lastBarRef.current = sorted[sorted.length - 1];
           
           const volData = sorted.map(d => ({
@@ -185,26 +179,19 @@ export function ChartWidget({
             value: d.value,
             color: d.close >= d.open ? "rgba(16, 185, 129, 0.2)" : "rgba(244, 63, 94, 0.2)"
           }));
-          volumeSeries.setData(volData);
-          
-          chart.timeScale().fitContent();
+          volumeSeriesRef.current?.setData(volData);
+          chartRef.current?.timeScale().fitContent();
         } else {
-            setError(`No data found for ${symbol}. (Did you run the backend sync?)`);
+          setError(`No history for ${symbol}`);
         }
       } catch (e: any) {
-        setError(e.message || "Failed to load chart data");
+        setError(e.message || "History error");
       } finally {
         setLoading(false);
       }
     };
 
     loadData(refreshKey > 0);
-
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.remove();
-      }
-    };
   }, [symbol, days, refreshKey]);
 
   return (

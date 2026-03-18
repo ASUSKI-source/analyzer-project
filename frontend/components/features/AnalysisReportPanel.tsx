@@ -379,10 +379,19 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
     }
     if (!selectedSymbol || !displayedAssets.some((a) => a.symbol === selectedSymbol)) {
       const firstSym = displayedAssets[0].symbol;
-      setSelectedSymbol(firstSym);
-      // Notify parent of auto-selection so chart matches
-      if (externalSymbol !== firstSym) {
-        onSelectAsset?.(firstSym);
+      
+      // If we have an external symbol from the dashboard (Stats/Watchlist), use that!
+      if (externalSymbol && displayedAssets.some(a => a.symbol === externalSymbol)) {
+        setSelectedSymbol(externalSymbol);
+        fetchAssetDeep(externalSymbol);
+      } else {
+        // Otherwise, fallback to first in list
+        setSelectedSymbol(firstSym);
+        fetchAssetDeep(firstSym);
+        // Only notify parent if we are truly forcing a new selection
+        if (externalSymbol !== firstSym) {
+          onSelectAsset?.(firstSym);
+        }
       }
     }
   }, [displayedAssets, selectedSymbol, externalSymbol, onSelectAsset]);
