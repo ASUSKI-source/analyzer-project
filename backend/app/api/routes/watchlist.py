@@ -26,8 +26,7 @@ from app.services.watchlist import (
     add_to_watchlist,
     remove_from_watchlist,
     delete_watchlist,
-    search_symbols,
-    search_symbols_db,
+    search_symbols
 )
 
 router = APIRouter()
@@ -60,18 +59,13 @@ async def create_new_watchlist(
 
 
 @router.get("/search")
-async def search_tickers(
-    q: str = "",
-    db: AsyncSession = Depends(get_db),
-):
+async def search_tickers(q: str = "", db: AsyncSession = Depends(get_db)):
     """
     Search for ticker symbols by name or symbol.
-    Uses canonical DB symbols first, then local dictionary fallback.
+    No auth required — safe for guests to use.
+    Uses local database with external fallback if results are sparse.
     """
-    db_results = await search_symbols_db(db, q)
-    if db_results:
-        return {"results": db_results, "count": len(db_results)}
-    results = await search_symbols(q)
+    results = await search_symbols(db, q)
     return {"results": results, "count": len(results)}
 
 

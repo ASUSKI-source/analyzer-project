@@ -81,20 +81,34 @@ async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, use
     asset = result.scalars().first()
 
     if not asset:
+        # Ingest new asset metadata
         crypto_symbols = {"BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "DOT", "AVAX", "MATIC", "LINK", "SHIB", "LTC", "BCH", "UNI", "NEAR", "ATOM", "APT", "ARB", "OP", "TIA", "INJ", "RENDER", "FET", "PEPE", "BONK", "SUI", "SEI", "WIF"}
         is_crypto = symbol.upper() in crypto_symbols or "-" in symbol
-        new_asset = Asset(symbol=symbol, name=symbol, asset_type="crypto" if is_crypto else "stock")
+        
+        name = symbol.upper()
+        asset_type = "crypto" if is_crypto else "stock"
+        
+        # Try a quick metadata lookup if possible
+        try:
+            from app.services.polygon import search_polygon_tickers
+            polygon_matches = await search_polygon_tickers(symbol.upper())
+            for match in polygon_matches:
+                if match["symbol"] == symbol.upper():
+                    name = match["name"]
+                    asset_type = match["type"]
+                    break
+        except Exception:
+            pass # Fallback to default name/type
+
+        new_asset = Asset(symbol=symbol.upper(), name=name, asset_type=asset_type)
         db.add(new_asset)
         try:
             await db.flush()
             asset = new_asset
         except IntegrityError:
-            # Another request created this asset concurrently — roll back and re-fetch.
             await db.rollback()
-            result2 = await db.execute(select(Asset).where(Asset.symbol == symbol))
+            result2 = await db.execute(select(Asset).where(Asset.symbol == symbol.upper()))
             asset = result2.scalars().first()
-            if not asset:
-                raise
 
     # Check if already on this specific watchlist
     existing = await db.execute(
@@ -153,100 +167,48 @@ async def delete_watchlist(db: AsyncSession, watchlist_id: str, user: User) -> b
     return delete_result.rowcount > 0
 
 
-async def search_symbols(query: str) -> List[Dict[str, str]]:
+async def search_symbols(db: AsyncSession, query: str) -> List[Dict[str, str]]:
     """
-    Search for ticker symbols matching a query string.
-    Uses a curated local dictionary for instant results without 
-    hitting external APIs (avoids Polygon rate limits per CONVENTIONS §7.1).
-    """
-    query = query.strip()
-    if len(query) < 1:
-        return []
-    query = query[:40]
-    if not re.fullmatch(r"[A-Za-z0-9\-/\.\s]+", query):
-        return []
-
-    normalized = query.upper()
-    normalized = re.sub(r"[/\.\s]+", "-", normalized)
-    normalized = normalized.removesuffix("-USD").removesuffix("-USDT")
-
-    # Curated symbol dictionary — covers the most commonly traded assets.
-    # Docs: This is intentionally local to avoid rate-limiting on Polygon's
-    # reference endpoint. Can be expanded or replaced with a DB table later.
-    SYMBOL_DICT = [
-        {"symbol": "AAPL", "name": "Apple Inc.", "type": "stock"},
-        {"symbol": "MSFT", "name": "Microsoft Corp.", "type": "stock"},
-        {"symbol": "GOOGL", "name": "Alphabet Inc.", "type": "stock"},
-        {"symbol": "AMZN", "name": "Amazon.com Inc.", "type": "stock"},
-        {"symbol": "NVDA", "name": "NVIDIA Corp.", "type": "stock"},
-        {"symbol": "META", "name": "Meta Platforms Inc.", "type": "stock"},
-        {"symbol": "TSLA", "name": "Tesla Inc.", "type": "stock"},
-        {"symbol": "AMD", "name": "Advanced Micro Devices", "type": "stock"},
-        {"symbol": "NFLX", "name": "Netflix Inc.", "type": "stock"},
-        {"symbol": "JPM", "name": "JPMorgan Chase", "type": "stock"},
-        {"symbol": "V", "name": "Visa Inc.", "type": "stock"},
-        {"symbol": "DIS", "name": "Walt Disney Co.", "type": "stock"},
-        {"symbol": "BA", "name": "Boeing Co.", "type": "stock"},
-        {"symbol": "INTC", "name": "Intel Corp.", "type": "stock"},
-        {"symbol": "CRM", "name": "Salesforce Inc.", "type": "stock"},
-        {"symbol": "UBER", "name": "Uber Technologies", "type": "stock"},
-        {"symbol": "COIN", "name": "Coinbase Global", "type": "stock"},
-        {"symbol": "PLTR", "name": "Palantir Technologies", "type": "stock"},
-        {"symbol": "SPY", "name": "S&P 500 ETF", "type": "stock"},
-        {"symbol": "QQQ", "name": "Nasdaq 100 ETF", "type": "stock"},
-        {"symbol": "VIX", "name": "CBOE Volatility Index", "type": "stock"},
-        {"symbol": "BTC", "name": "Bitcoin", "type": "crypto"},
-        {"symbol": "ETH", "name": "Ethereum", "type": "crypto"},
-        {"symbol": "SOL", "name": "Solana", "type": "crypto"},
-        {"symbol": "DOGE", "name": "Dogecoin", "type": "crypto"},
-        {"symbol": "ADA", "name": "Cardano", "type": "crypto"},
-        {"symbol": "XRP", "name": "Ripple", "type": "crypto"},
-        {"symbol": "DOT", "name": "Polkadot", "type": "crypto"},
-        {"symbol": "AVAX", "name": "Avalanche", "type": "crypto"},
-        {"symbol": "MATIC", "name": "Polygon", "type": "crypto"},
-        {"symbol": "LINK", "name": "Chainlink", "type": "crypto"},
-    ]
-
-    results = [
-        s for s in SYMBOL_DICT
-        if normalized in s["symbol"]
-        or normalized.replace("-", "") in s["symbol"].replace("-", "")
-        or query.lower() in s["name"].lower()
-    ]
-
-    return results[:10]  # Cap at 10 results to keep responses fast
-
-
-async def search_symbols_db(db: AsyncSession, query: str, limit: int = 15) -> List[Dict[str, str]]:
-    """
-    Canonical symbol search from local DB (no external API calls).
-    Supports exact/prefix symbol and name contains matching.
+    Unified search for ticker symbols.
+    1. Search local DB first (fast, covers active assets).
+    2. Fallback to Polygon reference API if local results are sparse.
+    3. Ensure no duplicates and standard formatting.
     """
     query = query.strip()
-    if len(query) < 1:
-        return []
-    query = query[:40]
-    if not re.fullmatch(r"[A-Za-z0-9\-/\.\s]+", query):
+    if not query:
         return []
 
-    normalized = query.upper()
-    normalized = re.sub(r"[/\.\s]+", "-", normalized)
-    normalized = normalized.removesuffix("-USD").removesuffix("-USDT")
-    compact = normalized.replace("-", "")
-
+    # 1. Search locally in the 'assets' table
+    # Match symbols or names that contain the query string (case-insensitive)
+    search_pattern = f"%{query}%"
     stmt = (
         select(Asset)
         .where(
-            or_(
-                func.upper(Asset.symbol) == normalized,
-                func.upper(Asset.symbol).like(f"{normalized}%"),
-                func.replace(func.upper(Asset.symbol), "-", "").like(f"{compact}%"),
-                func.upper(Asset.name).like(f"%{query.upper()}%"),
-            )
+            (Asset.symbol.ilike(search_pattern)) | 
+            (Asset.name.ilike(search_pattern))
         )
-        .order_by(func.length(Asset.symbol).asc(), Asset.symbol.asc())
-        .limit(max(1, min(limit, 25)))
+        .limit(10)
     )
     result = await db.execute(stmt)
-    assets = result.scalars().all()
-    return [{"symbol": a.symbol, "name": a.name, "type": a.asset_type} for a in assets]
+    db_assets = result.scalars().all()
+
+    results_map = {
+        a.symbol: {"symbol": a.symbol, "name": a.name, "type": a.asset_type}
+        for a in db_assets
+    }
+
+    # 2. Fallback to Polygon if we have few local results (only if API key is present)
+    if len(results_map) < 5:
+        try:
+            from app.services.polygon import search_polygon_tickers
+            ext_results = await search_polygon_tickers(query)
+            for r in ext_results:
+                if r["symbol"] not in results_map:
+                    results_map[r["symbol"]] = r
+        except ImportError:
+            pass # Polygon service might not be fully initialized or module missing in some envs
+        except Exception as e:
+            # We don't want to crash the whole search if Polygon fails
+            pass
+
+    return list(results_map.values())[:15]

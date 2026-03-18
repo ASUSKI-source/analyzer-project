@@ -66,3 +66,46 @@ async def fetch_polygon_price(symbol: str) -> Optional[Dict[str, Any]]:
         
     # Return last good price from cache if API failed or was restricted
     return await cache_client.get(cache_key)
+
+
+async def search_polygon_tickers(query: str) -> List[Dict[str, Any]]:
+    """
+    Search for tickers using Polygon's v3 reference API.
+    Docs: https://polygon.io/docs/stocks/get_v3_reference_tickers
+    """
+    query = query.strip().upper()
+    if not query or not _has_valid_key():
+        return []
+        
+    url = "https://api.polygon.io/v3/reference/tickers"
+    params = {
+        "search": query,
+        "active": "true",
+        "limit": 10,
+        "apiKey": settings.POLYGON_API_KEY
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, params=params)
+            if response.status_code == 429:
+                return []
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            for t in data.get("results", []):
+                # Normalize types to match our 'stock' | 'crypto' internal convention
+                mkt = t.get("market", "")
+                asset_type = "stock" if mkt == "stocks" else "crypto" if mkt == "crypto" else "other"
+                
+                results.append({
+                    "symbol": t.get("ticker"),
+                    "name": t.get("name"),
+                    "type": asset_type
+                })
+            return results
+    except Exception as e:
+        logger.error(f"Polygon ticker search failed: {e}")
+        return []
