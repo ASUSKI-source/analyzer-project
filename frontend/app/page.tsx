@@ -230,6 +230,7 @@ export default function Home() {
           {user && !isGuest && (
             <AnalysisReportPanel 
               symbols={userSymbols.map(s => s.symbol)} 
+              selectedSymbol={selectedAsset}
               onSelectAsset={(sym) => setSelectedAsset(sym)} 
             />
           )}

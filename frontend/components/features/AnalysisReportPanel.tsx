@@ -112,6 +112,7 @@ interface AssetDeepAnalysis {
 
 interface Props {
   symbols: string[];
+  selectedSymbol?: string | null;
   onSelectAsset?: (symbol: string) => void;
 }
 
@@ -175,7 +176,7 @@ function signalClass(signal?: string): string {
   return "text-slate-300";
 }
 
-export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
+export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, onSelectAsset }: Props) {
   const [report, setReport] = useState<AIReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshingDeep, setRefreshingDeep] = useState(false);
@@ -361,15 +362,30 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
     displayedAssets.find((a) => a.symbol === selectedSymbol) || displayedAssets[0] || null;
   const selectedDeep = selectedAsset ? assetDeepData[selectedAsset.symbol] : undefined;
 
+  // Sync internal selection with external prop
+  useEffect(() => {
+    if (externalSymbol && externalSymbol !== selectedSymbol) {
+      if (displayedAssets.some(a => a.symbol === externalSymbol)) {
+        setSelectedSymbol(externalSymbol);
+        fetchAssetDeep(externalSymbol);
+      }
+    }
+  }, [externalSymbol, displayedAssets, fetchAssetDeep, selectedSymbol]);
+
   useEffect(() => {
     if (!displayedAssets.length) {
       setSelectedSymbol(null);
       return;
     }
     if (!selectedSymbol || !displayedAssets.some((a) => a.symbol === selectedSymbol)) {
-      setSelectedSymbol(displayedAssets[0].symbol);
+      const firstSym = displayedAssets[0].symbol;
+      setSelectedSymbol(firstSym);
+      // Notify parent of auto-selection so chart matches
+      if (externalSymbol !== firstSym) {
+        onSelectAsset?.(firstSym);
+      }
     }
-  }, [displayedAssets, selectedSymbol]);
+  }, [displayedAssets, selectedSymbol, externalSymbol, onSelectAsset]);
 
   const coverageEstimate = useMemo(() => {
     if (!displayedAssets.length) return 0;
