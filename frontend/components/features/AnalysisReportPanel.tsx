@@ -588,7 +588,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
               <button
                 key={asset.symbol}
                 onClick={() => handleRowSelect(asset.symbol)}
-                className={`relative group text-left p-3 rounded-xl border transition-all duration-200 active:scale-[0.98] ${
+                className={`relative group text-left p-3 rounded-xl border transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl hover:shadow-blue-500/10 active:scale-[0.98] ${
                   isSelected 
                     ? "bg-white/10 border-blue-500/50 ring-1 ring-blue-500/20" 
                     : "bg-white/[0.03] border-white/10 hover:border-white/20 hover:bg-white/[0.05]"
@@ -690,8 +690,11 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
                 <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
                 
                 {assetDeepLoading[selectedAsset.symbol] && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-                    <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
+                    <div className="w-12 h-12 rounded-full border-2 border-blue-500/20 border-t-blue-500 animate-spin mb-4" />
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-blue-400 font-bold animate-pulse">
+                      Assembling intelligence...
+                    </span>
                   </div>
                 )}
 
