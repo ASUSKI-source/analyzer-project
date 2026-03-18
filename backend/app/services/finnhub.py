@@ -308,7 +308,12 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
             "high_52week": metrics.get("52WeekHigh"),
             "low_52week": metrics.get("52WeekLow"),
             "beta": metrics.get("beta"),
-            "description": f"Fundamental data for {symbol}"
+            # Short Squeeze Metrics
+            "short_interest": metrics.get("shortInterest"),
+            "short_ratio": metrics.get("shortRatio"),
+            "float_shares": metrics.get("sharesFloat"),
+            "free_float": metrics.get("freeFloat"),
+            "description": f"Fundamental and Short data for {symbol}"
         }
         
         # Cache for 12 hours
@@ -319,6 +324,40 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
         logger.warning(f"Finnhub fundamental error for {symbol}: {e}")
         return _fundamental_fallback(symbol)
 
+
+async def fetch_institutional_ownership(symbol: str) -> Dict[str, Any]:
+    """
+    Fetch institutional ownership data (shares held, number of institutions).
+    """
+    symbol = symbol.upper()
+    cache_key = f"institutional_cache:{symbol}"
+    cached = await cache_client.get(cache_key)
+    if cached: return cached
+
+    if not _has_valid_key() or await cache_client.get("circuit_breaker:finnhub"):
+        return {"symbol": symbol, "shares_held": None, "institution_count": None}
+
+    url = "https://finnhub.io/api/v1/stock/institutional-ownership"
+    try:
+        client = get_http_client()
+        response = await client.get(url, params={"symbol": symbol, "token": settings.FINNHUB_API_KEY}, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+        ownership = data.get("data", [])
+        
+        # Get latest filing
+        latest = ownership[0] if ownership else {}
+        result = {
+            "symbol": symbol,
+            "shares_held": latest.get("shares"),
+            "institution_count": len(ownership),
+            "top_holder": latest.get("investorName")
+        }
+        await cache_client.set(cache_key, result, expire_seconds=86400) # 24h
+        return result
+    except Exception as e:
+        logger.warning(f"Finnhub institutional error for {symbol}: {e}")
+        return {"symbol": symbol, "shares_held": None, "institution_count": None}
 
 async def get_batch_fundamentals(symbols: List[str]) -> List[Dict[str, Any]]:
     """Parallel fetch of fundamentals for multiple symbols."""
@@ -342,6 +381,8 @@ def _fundamental_fallback(symbol: str) -> Dict[str, Any]:
         "high_52week": rng.uniform(150, 250),
         "low_52week": rng.uniform(80, 150),
         "beta": rng.uniform(0.5, 1.8),
+        "short_interest": rng.uniform(1, 15), # Percent
+        "short_ratio": rng.uniform(1, 10),
         "description": f"Simulated fundamental profile for {symbol}"
     }
 

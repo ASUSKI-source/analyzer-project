@@ -78,6 +78,9 @@ class TechnicalIndicators(BaseModel):
     ema_21: Optional[float] = None
     bollinger_upper: Optional[float] = None
     bollinger_lower: Optional[float] = None
+    vwap: Optional[float] = None
+    obv: Optional[float] = None
+    adx: Optional[float] = None
     trend_signal: str = "Neutral" # Bullish, Bearish, or Neutral
 
 class FundamentalData(BaseModel):
@@ -91,7 +94,24 @@ class FundamentalData(BaseModel):
     high_52week: Optional[float] = None
     low_52week: Optional[float] = None
     beta: Optional[float] = None
+    short_interest: Optional[float] = None
+    short_ratio: Optional[float] = None
+    shares_float: Optional[float] = None
+    free_float: Optional[float] = None
     description: Optional[str] = None
+
+
+class InstitutionalOwnership(BaseModel):
+    shares_held: Optional[float] = None
+    institution_count: Optional[int] = None
+    top_holder: Optional[str] = None
+
+class CryptoOnChain(BaseModel):
+    fear_and_greed_score: Optional[int] = None
+    fear_and_greed_label: Optional[str] = None
+    long_short_ratio: Optional[float] = None
+    open_interest: Optional[float] = None
+    funding_rate: Optional[float] = None
 
 class AssetAnalysisResponse(BaseModel):
     """
@@ -103,4 +123,6 @@ class AssetAnalysisResponse(BaseModel):
     technicals: TechnicalIndicators
     fundamentals: FundamentalData
     sentiment: NewsSentiment
+    institutional: Optional[InstitutionalOwnership] = None
+    on_chain: Optional[CryptoOnChain] = None
     last_updated: str

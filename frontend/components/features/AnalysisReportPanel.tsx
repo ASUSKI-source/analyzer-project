@@ -4,13 +4,21 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
+  BarChart3,
   Gauge,
+  Globe,
+  Info,
+  Layers,
   Minus,
   RefreshCw,
+  Search,
   Shield,
   Sparkles,
   TrendingDown,
   TrendingUp,
+  Users,
+  Zap,
 } from "lucide-react";
 import { API_BASE_URL } from "@/services/api_client";
 
@@ -62,6 +70,9 @@ interface AssetDeepAnalysis {
     sma_200?: number;
     ema_9?: number;
     ema_21?: number;
+    vwap?: number;
+    obv?: number;
+    adx?: number;
     trend_signal?: string;
   };
   fundamentals?: {
@@ -72,10 +83,29 @@ interface AssetDeepAnalysis {
     market_cap?: number;
     high_52week?: number;
     low_52week?: number;
+    short_interest?: number;
+    short_ratio?: number;
+    shares_float?: number;
+    free_float?: number;
   };
   sentiment?: {
     sentiment_score?: number;
     trending_topics?: string[];
+  };
+  institutional?: {
+    shares_held?: number;
+    institution_count?: number;
+    top_holder?: string;
+  };
+  on_chain?: {
+    fear_and_greed?: {
+      value: string;
+      value_classification: string;
+    };
+    futures_sentiment?: {
+      long_short_ratio: number;
+      open_interest: number;
+    };
   };
   last_updated?: string;
 }
@@ -156,6 +186,7 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [assetDeepData, setAssetDeepData] = useState<Record<string, AssetDeepAnalysis>>({});
   const [assetDeepLoading, setAssetDeepLoading] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<"signals" | "technicals" | "fundamentals" | "squeeze" | "macro">("signals");
 
   const fetchAssetDeep = useCallback(
     async (symbol: string): Promise<void> => {
@@ -171,8 +202,8 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
         if (!res.ok) return;
         const data: AssetDeepAnalysis = await res.json();
         setAssetDeepData((prev) => ({ ...prev, [symbol]: data }));
-      } catch {
-        // best effort enrichment
+      } catch (err) {
+        console.error(`Deep analysis fetch failed for ${symbol}:`, err);
       } finally {
         setAssetDeepLoading((prev) => ({ ...prev, [symbol]: false }));
       }
@@ -457,324 +488,405 @@ export function AnalysisReportPanel({ symbols, onSelectAsset }: Props) {
 
   return (
     <div className="true-glass rounded-2xl overflow-hidden" id="ai-analysis-panel">
-      <div className="border-b border-white/10 bg-black/30 p-4 sm:p-5">
-        <div className="flex items-center justify-between gap-3">
+      {/* 1. Header & Executive Summary */}
+      <div className="border-b border-white/10 bg-black/40 p-4 sm:p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h3 className="text-sm uppercase tracking-[0.16em] text-slate-300 font-semibold">Analysis Report</h3>
-            <p className="mt-1 text-xs text-slate-400">Executive strip, signal matrix, focused drilldown</p>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {report.source_status && (
-                <span
-                  title="Current analysis response source"
-                  className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300"
-                >
-                  {report.source_status}
-                </span>
-              )}
-              {report.from_cache && (
-                <span
-                  title="Served from cached report"
-                  className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-300"
-                >
-                  Cached
-                </span>
-              )}
-              {report._served_last_good && (
-                <span
-                  title="Fresh generation failed; showing last successful report"
-                  className="rounded border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-200"
-                >
-                  Last Good
-                </span>
-              )}
-              {report._mock && (
-                <span
-                  title="Simulated analysis fallback was used"
-                  className="rounded border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-200"
-                >
-                  Simulated
-                </span>
-              )}
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-blue-400" />
+              <h3 className="text-sm uppercase tracking-[0.2em] text-slate-100 font-bold">AI Analysis Brief</h3>
             </div>
+            <p className="mt-1 text-[11px] text-slate-400 font-medium">Institutional-grade multi-layer intelligence</p>
           </div>
-          <button
-            onClick={() => fetchReport(true)}
-            className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10 transition"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshingDeep ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="border-b border-white/10 bg-black/15 p-4 sm:p-5">
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-2 text-[11px]">
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Health</p>
-            <p className={`font-semibold ${HEALTH_COLORS[report.watchlist_health] || "text-slate-200"}`}>{report.watchlist_health}</p>
-          </div>
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Risk</p>
-            <p className={`font-semibold ${RISK_COLORS[report.risk_level] || "text-slate-200"}`}>
-              <span className="inline-flex items-center gap-1"><Shield className="w-3 h-3" />{report.risk_level}</span>
-            </p>
-          </div>
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Coverage</p>
-            <p className="font-semibold text-slate-200">{coverageEstimate}%</p>
-          </div>
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Status</p>
-            <p className="font-semibold text-slate-200">{report.source_status || "unknown"}</p>
-          </div>
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Assets</p>
-            <p className="font-semibold text-slate-200">{displayedAssets.length}</p>
-          </div>
-          <div className="rounded border border-white/10 bg-white/[0.03] p-2">
-            <p className="uppercase tracking-wider text-slate-400">Updated</p>
-            <p className="font-semibold text-slate-200">{report.generated_at ? new Date(report.generated_at).toLocaleTimeString() : "-"}</p>
-          </div>
-        </div>
-        <p className="mt-3 text-xs leading-relaxed text-slate-300">{report.market_summary}</p>
-      </div>
-
-      <div className="p-4 sm:p-5">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-slate-400">Filter</span>
-          {(["ALL", "BULLISH", "BEARISH", "NEUTRAL", "CAUTION"] as VerdictFilter[]).map((vf) => (
+          <div className="flex items-center gap-3">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500">Portfolio Health</span>
+              <span className={`text-sm font-bold ${HEALTH_COLORS[report.watchlist_health] || "text-slate-200"}`}>
+                {report.watchlist_health}
+              </span>
+            </div>
+            <div className="h-8 w-px bg-white/10 mx-1" />
             <button
-              key={vf}
-              onClick={() => setVerdictFilter(vf)}
-              className={`rounded-md border px-2.5 py-1 text-[11px] transition ${
-                verdictFilter === vf
-                  ? "border-blue-400/40 bg-blue-500/15 text-blue-200"
-                  : "border-white/15 bg-white/[0.03] text-slate-300 hover:bg-white/[0.08]"
-              }`}
+              onClick={() => fetchReport(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10 transition active:scale-95"
             >
-              {vf}
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshingDeep ? "animate-spin" : ""}`} />
+              Re-run
             </button>
-          ))}
-          <button
-            onClick={resetView}
-            className="ml-1 rounded-md border border-white/15 bg-white/[0.03] px-2.5 py-1 text-[11px] text-slate-300 transition hover:bg-white/[0.08]"
-            title="Reset filter and sorting"
-          >
-            Reset View
-          </button>
-          <span className="ml-1 text-[11px] text-slate-500">Use up/down keys to move rows</span>
+          </div>
         </div>
 
-        <div
-          className="overflow-x-auto rounded-lg border border-white/10"
-          tabIndex={0}
-          onKeyDown={handleMatrixKeyNav}
-        >
-          <table className="w-full min-w-[980px] text-xs">
-            <thead className="text-slate-300">
-              <tr className="border-b border-white/10">
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("symbol")} onClick={() => toggleSort("symbol")} title="Sort by symbol">
-                    Symbol <span className="text-[10px]">{sortGlyph("symbol")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("verdict")} onClick={() => toggleSort("verdict")} title="Sort by verdict">
-                    Verdict <span className="text-[10px]">{sortGlyph("verdict")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("h1")} onClick={() => toggleSort("h1")} title="Sort by 1h signal">
-                    1h <span className="text-[10px]">{sortGlyph("h1")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("d1")} onClick={() => toggleSort("d1")} title="Sort by 1d signal">
-                    1d <span className="text-[10px]">{sortGlyph("d1")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("w1")} onClick={() => toggleSort("w1")} title="Sort by 1w signal">
-                    1w <span className="text-[10px]">{sortGlyph("w1")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("rsi")} onClick={() => toggleSort("rsi")} title="Sort by RSI">
-                    RSI <span className="text-[10px]">{sortGlyph("rsi")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("macd")} onClick={() => toggleSort("macd")} title="Sort by MACD signal">
-                    MACD <span className="text-[10px]">{sortGlyph("macd")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("ema")} onClick={() => toggleSort("ema")} title="Sort by EMA signal">
-                    EMA <span className="text-[10px]">{sortGlyph("ema")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("pe")} onClick={() => toggleSort("pe")} title="Sort by P/E">
-                    P/E <span className="text-[10px]">{sortGlyph("pe")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("beta")} onClick={() => toggleSort("beta")} title="Sort by beta">
-                    Beta <span className="text-[10px]">{sortGlyph("beta")}</span>
-                  </button>
-                </th>
-                <th className="sticky top-0 z-10 bg-black/75 backdrop-blur px-3 py-2 text-left font-semibold">
-                  <button className={sortButtonClass("catalyst")} onClick={() => toggleSort("catalyst")} title="Sort by catalyst">
-                    Catalyst <span className="text-[10px]">{sortGlyph("catalyst")}</span>
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayedAssets.map((asset) => {
-                const style = VERDICT_STYLE[asset.verdict] || VERDICT_STYLE.NEUTRAL;
-                const deep = assetDeepData[asset.symbol];
-                return (
-                  <tr
-                    key={asset.symbol}
-                    onClick={() => handleRowSelect(asset.symbol)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleRowSelect(asset.symbol);
-                      }
-                    }}
-                    tabIndex={0}
-                    className={`cursor-pointer border-b border-white/5 transition ${
-                      selectedAsset?.symbol === asset.symbol ? "bg-white/[0.07]" : "hover:bg-white/[0.035]"
-                    }`}
-                  >
-                    <td className="sticky left-0 z-[1] bg-black/70 px-3 py-2 font-mono font-semibold text-slate-100">
-                      <div className="relative pl-2">
-                        {selectedAsset?.symbol === asset.symbol && (
-                          <span className="absolute left-0 top-0 bottom-0 w-0.5 rounded bg-blue-300" />
-                        )}
-                        {asset.symbol}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 ${style.bg} ${style.text}`}>
-                        {style.icon}
-                        {asset.verdict}
-                      </span>
-                    </td>
-                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.tactical_1h)}`}>{asset.timeframe_signals?.tactical_1h || "-"}</td>
-                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.trend_1d)}`}>{asset.timeframe_signals?.trend_1d || "-"}</td>
-                    <td className={`px-3 py-2 ${signalClass(asset.timeframe_signals?.strategic_1w)}`}>{asset.timeframe_signals?.strategic_1w || "-"}</td>
-                    <td className="px-3 py-2 text-slate-200">{fmt(asset.key_metrics?.rsi_daily, 1)}</td>
-                    <td className="px-3 py-2 text-slate-200">{asset.key_metrics?.macd_signal || "-"}</td>
-                    <td className="px-3 py-2 text-slate-200">{asset.key_metrics?.ema_signal || "-"}</td>
-                    <td className="px-3 py-2 text-slate-200">{fmt(asset.key_metrics?.pe_ratio, 2)}</td>
-                    <td className="px-3 py-2 text-slate-200">{fmt(deep?.fundamentals?.beta, 2)}</td>
-                    <td className="max-w-[220px] truncate px-3 py-2 text-slate-400" title={asset.catalyst}>{asset.catalyst || "-"}</td>
-                  </tr>
-                );
-              })}
-              {displayedAssets.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="px-3 py-6 text-center text-slate-400">
-                    No assets match the current filter.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3">
+            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Risk Profile</span>
+            <div className={`flex items-center gap-1.5 font-bold ${RISK_COLORS[report.risk_level] || "text-slate-200"}`}>
+              <Shield className="w-3.5 h-3.5" />
+              {report.risk_level}
+            </div>
+          </div>
+          <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3">
+            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Coverage</span>
+            <div className="text-slate-100 font-bold">{coverageEstimate}%</div>
+          </div>
+          <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3 hidden md:block">
+            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Assets</span>
+            <div className="text-slate-100 font-bold">{displayedAssets.length} <span className="text-slate-500 text-[10px] font-normal">Tracked</span></div>
+          </div>
+          <div className="rounded-xl bg-white/[0.03] border border-white/5 p-3 hidden md:block">
+            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Freshness</span>
+            <div className="text-slate-100 font-bold">{report.generated_at ? new Date(report.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit'}) : "-"}</div>
+          </div>
         </div>
 
-        {selectedAsset && (
-          <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-blue-300 font-semibold">
-                <Activity className="w-3.5 h-3.5" />
-                Technical Stack
-              </div>
-              {assetDeepLoading[selectedAsset.symbol] ? (
-                <p className="text-xs text-slate-400">Loading technical detail...</p>
-              ) : (
-                <div className="space-y-1 text-xs text-slate-300">
-                  <p>Trend: <span className="text-slate-100">{selectedDeep?.technicals?.trend_signal || selectedAsset.timeframe_signals?.trend_1d || "-"}</span></p>
-                  <p>RSI: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.rsi, 1)}</span></p>
-                  <p>MACD / Signal: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.macd, 2)} / {fmt(selectedDeep?.technicals?.macd_signal, 2)}</span></p>
-                  <p>EMA 9 / 21: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.ema_9, 2)} / {fmt(selectedDeep?.technicals?.ema_21, 2)}</span></p>
-                  <p>SMA 20 / 50 / 200: <span className="text-slate-100">{fmt(selectedDeep?.technicals?.sma_20, 2)} / {fmt(selectedDeep?.technicals?.sma_50, 2)} / {fmt(selectedDeep?.technicals?.sma_200, 2)}</span></p>
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-purple-300 font-semibold">
-                <Gauge className="w-3.5 h-3.5" />
-                Fundamental Stack
-              </div>
-              {assetDeepLoading[selectedAsset.symbol] ? (
-                <p className="text-xs text-slate-400">Loading fundamentals...</p>
-              ) : (
-                <div className="space-y-1 text-xs text-slate-300">
-                  <p>P/E: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.pe_ratio ?? selectedAsset.key_metrics?.pe_ratio, 2)}</span></p>
-                  <p>EPS: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.eps, 2)}</span></p>
-                  <p>Beta: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.beta, 2)}</span></p>
-                  <p>Dividend Yield: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.dividend_yield, 2)}%</span></p>
-                  <p>Market Cap: <span className="text-slate-100">{fmtCompact(selectedDeep?.fundamentals?.market_cap)}</span></p>
-                  <p>52W H/L: <span className="text-slate-100">{fmt(selectedDeep?.fundamentals?.high_52week, 2)} / {fmt(selectedDeep?.fundamentals?.low_52week, 2)}</span></p>
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-              <div className="mb-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-amber-300 font-semibold">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Event + AI Notes
-              </div>
-              {assetDeepLoading[selectedAsset.symbol] ? (
-                <p className="text-xs text-slate-400">Loading event context...</p>
-              ) : (
-                <div className="space-y-2 text-xs text-slate-300">
-                  <p>Sentiment: <span className="text-slate-100">{fmt(selectedDeep?.sentiment?.sentiment_score, 2)}</span></p>
-                  <div className="flex flex-wrap gap-1">
-                    {(selectedDeep?.sentiment?.trending_topics || []).slice(0, 4).map((topic, i) => (
-                      <span key={`${selectedAsset.symbol}-topic-${i}`} className="rounded border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">
-                        {topic}
-                      </span>
-                    ))}
-                    {(selectedDeep?.sentiment?.trending_topics || []).length === 0 && (
-                      <span className="text-slate-400">No event tags available</span>
-                    )}
-                  </div>
-                  <p className="text-slate-200">{selectedAsset.action_note || "-"}</p>
-                  {!!selectedAsset.catalyst && <p className="text-amber-200/90">Catalyst: {selectedAsset.catalyst}</p>}
-                </div>
-              )}
-            </div>
+        <div className="mt-4 p-4 rounded-xl border border-blue-500/10 bg-blue-500/5">
+          <div className="flex gap-3">
+            <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+            <p className="text-xs leading-relaxed text-slate-300 italic">"{report.market_summary}"</p>
           </div>
-        )}
-
-        {selectedAsset && (
-          <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
-            <p className="mb-2 text-[11px] uppercase tracking-wider text-slate-400">AI Bullet Synthesis</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {(selectedAsset.analysis_bullets || []).map((bullet, idx) => (
-                <p key={`${selectedAsset.symbol}-bullet-${idx}`} className="text-xs text-slate-300 leading-relaxed">
-                  - {bullet}
-                </p>
-              ))}
-              {(selectedAsset.analysis_bullets || []).length === 0 && (
-                <p className="text-xs text-slate-400">No per-asset bullets returned.</p>
-              )}
-            </div>
-          </div>
-        )}
+        </div>
       </div>
+
+      {/* 2. Asset Selection Grid */}
+      <div className="p-4 sm:p-6 bg-black/10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-4 overflow-x-auto no-scrollbar pb-1">
+            {(["ALL", "BULLISH", "BEARISH", "NEUTRAL", "CAUTION"] as VerdictFilter[]).map((vf) => (
+              <button
+                key={vf}
+                onClick={() => setVerdictFilter(vf)}
+                className={`text-[10px] font-bold uppercase tracking-wider transition-all px-1 py-1 border-b-2 whitespace-nowrap ${
+                  verdictFilter === vf
+                    ? "text-blue-400 border-blue-400"
+                    : "text-slate-500 border-transparent hover:text-slate-300"
+                }`}
+              >
+                {vf}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 hidden sm:block">Sort by:</span>
+            <select 
+              className="bg-white/5 border border-white/10 rounded px-2 py-1 text-[10px] text-slate-300 outline-none"
+              value={sortKey}
+              onChange={(e) => toggleSort(e.target.value as SortKey)}
+            >
+              <option value="symbol">Symbol</option>
+              <option value="verdict">Verdict</option>
+              <option value="rsi">RSI</option>
+              <option value="beta">Volatility</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {displayedAssets.map((asset) => {
+            const style = VERDICT_STYLE[asset.verdict] || VERDICT_STYLE.NEUTRAL;
+            const isSelected = selectedAsset?.symbol === asset.symbol;
+            
+            return (
+              <button
+                key={asset.symbol}
+                onClick={() => handleRowSelect(asset.symbol)}
+                className={`relative group text-left p-3 rounded-xl border transition-all duration-200 active:scale-[0.98] ${
+                  isSelected 
+                    ? "bg-white/10 border-blue-500/50 ring-1 ring-blue-500/20" 
+                    : "bg-white/[0.03] border-white/10 hover:border-white/20 hover:bg-white/[0.05]"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono font-bold text-slate-100">{asset.symbol}</span>
+                  <div className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 ${style.bg} ${style.text}`}>
+                    {style.icon}
+                    {asset.verdict}
+                  </div>
+                </div>
+
+                <div className="flex gap-1.5 mb-2">
+                  {Object.entries(asset.timeframe_signals || {}).map(([tf, signal]) => (
+                    <div 
+                      key={tf} 
+                      className={`h-1.5 flex-1 rounded-full ${
+                        signal.toLowerCase().includes("bull") ? "bg-green-500/50" : 
+                        signal.toLowerCase().includes("bear") ? "bg-red-500/50" : "bg-white/20"
+                      }`}
+                      title={`${tf.replace('strategic_','').replace('trend_','').replace('tactical_','')}: ${signal}`}
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between items-end mt-3">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] text-slate-500 uppercase font-bold">RSI</span>
+                    <span className={`text-[11px] font-bold ${
+                      (asset.key_metrics?.rsi_daily ?? 50) > 70 ? "text-red-400" :
+                      (asset.key_metrics?.rsi_daily ?? 50) < 30 ? "text-green-400" : "text-slate-300"
+                    }`}>
+                      {fmt(asset.key_metrics?.rsi_daily, 0)}
+                    </span>
+                  </div>
+                  <ArrowRight className={`w-3.5 h-3.5 text-slate-600 transition-transform group-hover:translate-x-0.5 ${isSelected ? "text-blue-400" : ""}`} />
+                </div>
+
+                {isSelected && (
+                  <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-blue-500 rounded-full" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+        {/* 3. Detail Drawer (Multi-tab) */}
+        {selectedAsset && (
+          <div className="mt-8 border-t border-white/10 pt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col lg:flex-row gap-8">
+              {/* Left: Summary & Tab Bar */}
+              <div className="lg:w-1/3 space-y-6">
+                <div>
+                  <h4 className="text-2xl font-mono font-bold text-slate-100 mb-1">{selectedAsset.symbol}</h4>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 capitalize">Daily Momentum:</span>
+                    <span className={`text-xs font-bold ${signalClass(selectedAsset.timeframe_signals?.trend_1d)}`}>
+                      {selectedAsset.timeframe_signals?.trend_1d}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  {(["signals", "technicals", "fundamentals", "squeeze", "macro"] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setActiveTab(t)}
+                      className={`flex items-center justify-between p-3 rounded-xl transition-all ${
+                        activeTab === t 
+                          ? "bg-blue-500/10 text-blue-400 border border-blue-500/20" 
+                          : "text-slate-500 hover:bg-white/5 border border-transparent"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        {t === "signals" && <Sparkles className="w-4 h-4" />}
+                        {t === "technicals" && <Activity className="w-4 h-4" />}
+                        {t === "fundamentals" && <BarChart3 className="w-4 h-4" />}
+                        {t === "squeeze" && <Zap className="w-4 h-4" />}
+                        {t === "macro" && <Globe className="w-4 h-4" />}
+                        <span className="text-xs font-bold uppercase tracking-wider">{t}</span>
+                      </div>
+                      <ArrowRight className={`w-3.5 h-3.5 opacity-0 -translate-x-2 transition-all ${activeTab === t ? "opacity-100 translate-x-0" : ""}`} />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="p-4 rounded-xl bg-amber-500/[0.03] border border-amber-500/10">
+                  <span className="text-[10px] uppercase text-amber-500 font-bold block mb-2">Tactical Action Note</span>
+                  <p className="text-xs text-slate-300 leading-relaxed italic">
+                    "{selectedAsset.action_note || "No specific tactical action required at current levels."}"
+                  </p>
+                </div>
+              </div>
+
+              {/* Right: Tab Content */}
+              <div className="lg:w-2/3 min-h-[300px] rounded-2xl bg-white/[0.02] border border-white/5 p-6 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
+                
+                {assetDeepLoading[selectedAsset.symbol] && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
+                    <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
+                  </div>
+                )}
+
+                {activeTab === "signals" && (
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-3 gap-4">
+                      {Object.entries(selectedAsset.timeframe_signals || {}).map(([tf, signal]) => (
+                        <div key={tf} className="p-3 rounded-xl bg-white/[0.03] border border-white/5">
+                          <span className="text-[9px] uppercase text-slate-500 font-bold block mb-1">
+                            {tf.replace('strategic_','sm:').replace('trend_','dly:').replace('tactical_','hly:')}
+                          </span>
+                          <span className={`text-xs font-bold ${signalClass(signal)}`}>{signal}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <h5 className="text-[10px] uppercase text-slate-500 font-bold mb-3 tracking-widest">AI Synthesis</h5>
+                      <div className="space-y-2">
+                        {(selectedAsset.analysis_bullets || []).map((b, i) => (
+                          <div key={i} className="flex gap-3 text-xs text-slate-300 leading-relaxed">
+                            <span className="text-blue-500 font-bold mt-1">/</span>
+                            <span>{b}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === "technicals" && (
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <section>
+                          <span className="text-[10px] uppercase text-slate-500 font-bold block mb-2">Relative Strength</span>
+                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden flex">
+                             <div 
+                               className={`h-full transition-all duration-1000 ${
+                                 (selectedDeep?.technicals?.rsi || 50) < 30 ? "bg-green-500" : 
+                                 (selectedDeep?.technicals?.rsi || 50) > 70 ? "bg-red-500" : "bg-blue-500"
+                               }`}
+                               style={{ width: `${selectedDeep?.technicals?.rsi || 50}%` }}
+                             />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] font-mono text-slate-500">
+                            <span>0</span>
+                            <span className="text-slate-300 font-bold">RSI: {fmt(selectedDeep?.technicals?.rsi, 1)}</span>
+                            <span>100</span>
+                          </div>
+                        </section>
+                        <section>
+                          <span className="text-[10px] uppercase text-slate-500 font-bold block mb-2">Trend Strength</span>
+                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                             <div className="h-full bg-slate-400" style={{ width: `${selectedDeep?.technicals?.adx || 25}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] font-mono text-slate-500">
+                            <span>WEAK</span>
+                            <span className="text-slate-300 font-bold">ADX: {fmt(selectedDeep?.technicals?.adx, 1)}</span>
+                            <span>STRONG</span>
+                          </div>
+                        </section>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                         <div className="p-2 rounded-lg bg-white/5 flex justify-between">
+                            <span className="text-slate-500">VWAP</span>
+                            <span className="font-mono text-slate-200">{fmt(selectedDeep?.technicals?.vwap || selectedDeep?.technicals?.sma_20, 2)}</span>
+                         </div>
+                         <div className="p-2 rounded-lg bg-white/5 flex justify-between">
+                            <span className="text-slate-500">OBV</span>
+                            <span className="font-mono text-slate-200">{fmtCompact(selectedDeep?.technicals?.obv)}</span>
+                         </div>
+                         <div className="p-2 rounded-lg bg-white/5 flex justify-between">
+                            <span className="text-slate-500">EMA 9/21</span>
+                            <span className="font-mono text-slate-200">{fmt(selectedDeep?.technicals?.ema_9, 1)} / {fmt(selectedDeep?.technicals?.ema_21, 1)}</span>
+                         </div>
+                         <div className="p-2 rounded-lg bg-white/5 flex justify-between">
+                            <span className="text-slate-500">SMA 50/200</span>
+                            <span className="font-mono text-slate-200">{fmt(selectedDeep?.technicals?.sma_50, 0)} / {fmt(selectedDeep?.technicals?.sma_200, 0)}</span>
+                         </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === "fundamentals" && (
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        {[
+                          { l: "Market Cap", v: fmtCompact(selectedDeep?.fundamentals?.market_cap) },
+                          { l: "P/E Ratio", v: fmt(selectedDeep?.fundamentals?.pe_ratio, 2) },
+                          { l: "EPS", v: fmt(selectedDeep?.fundamentals?.eps, 2) },
+                          { l: "Beta", v: fmt(selectedDeep?.fundamentals?.beta, 2) },
+                          { l: "Div Yield", v: `${fmt(selectedDeep?.fundamentals?.dividend_yield, 2)}%` },
+                          { l: "52W Range", v: `${fmt(selectedDeep?.fundamentals?.low_52week, 0)} - ${fmt(selectedDeep?.fundamentals?.high_52week, 0)}` }
+                        ].map((m, i) => (
+                          <div key={i} className="p-3 rounded-xl bg-white/[0.03] border border-white/5">
+                            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">{m.l}</span>
+                            <span className="text-xs font-mono text-slate-200">{m.v || "N/A"}</span>
+                          </div>
+                        ))}
+                     </div>
+                  </div>
+                )}
+
+                {activeTab === "squeeze" && (
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {(selectedDeep?.on_chain) ? (
+                        /* Crypto Derivatives View */
+                        <>
+                          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Long / Short Ratio</span>
+                            <span className="text-xl font-mono text-slate-100">{fmt(selectedDeep.on_chain.futures_sentiment?.long_short_ratio, 2)}</span>
+                            <p className="text-[10px] text-slate-500 mt-1">High ratio suggests overextended bullish positioning</p>
+                          </div>
+                          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Open Interest</span>
+                            <span className="text-xl font-mono text-slate-100">{fmtCompact(selectedDeep.on_chain.futures_sentiment?.open_interest)}</span>
+                            <p className="text-[10px] text-slate-500 mt-1">Net positions in perpetual contracts</p>
+                          </div>
+                        </>
+                      ) : (
+                        /* Stock Short Squeeze View */
+                        <>
+                          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Short Interest %</span>
+                            <span className={`text-xl font-mono ${(selectedDeep?.fundamentals?.short_interest || 0) > 10 ? "text-amber-400" : "text-slate-100"}`}>
+                              {fmt(selectedDeep?.fundamentals?.short_interest, 2)}%
+                            </span>
+                            <p className="text-[10px] text-slate-500 mt-1">Percentage of float sold short</p>
+                          </div>
+                          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                            <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">Short Ratio</span>
+                            <span className={`text-xl font-mono ${(selectedDeep?.fundamentals?.short_ratio || 0) > 5 ? "text-amber-400" : "text-slate-100"}`}>
+                              {fmt(selectedDeep?.fundamentals?.short_ratio, 1)}
+                            </span>
+                            <p className="text-[10px] text-slate-500 mt-1">Days to cover based on avg volume</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === "macro" && (
+                  <div className="space-y-6 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                       {selectedDeep?.on_chain?.fear_and_greed && (
+                          <div className="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                             <div className="flex items-center gap-2 mb-2">
+                                <Users className="w-4 h-4 text-indigo-400" />
+                                <span className="text-[10px] uppercase text-indigo-400 font-bold tracking-widest">Fear & Greed Index</span>
+                             </div>
+                             <span className="text-xl font-bold text-slate-100">{selectedDeep.on_chain.fear_and_greed.value}</span>
+                             <span className="ml-2 text-xs uppercase text-indigo-300 font-bold">/ {selectedDeep.on_chain.fear_and_greed.value_classification}</span>
+                          </div>
+                       )}
+                       {selectedDeep?.institutional && (
+                          <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
+                             <div className="flex items-center gap-2 mb-2">
+                                <Search className="w-4 h-4 text-blue-400" />
+                                <span className="text-[10px] uppercase text-blue-400 font-bold tracking-widest">Institutional Held</span>
+                             </div>
+                             <span className="text-xl font-bold text-slate-100">{fmt(selectedDeep.institutional.shares_held, 1)}%</span>
+                             <p className="text-[10px] text-slate-400 mt-1">Verified holdings across {selectedDeep.institutional.institution_count} entities</p>
+                          </div>
+                       )}
+                       <div className="p-4 rounded-xl bg-slate-500/5 border border-white/5 md:col-span-2">
+                         <span className="text-[10px] uppercase text-slate-500 font-bold block mb-3">Breaking Context</span>
+                         <div className="flex flex-wrap gap-2">
+                            {(selectedDeep?.sentiment?.trending_topics || []).map((t, i) => (
+                              <span key={i} className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-slate-300">#{t}</span>
+                            ))}
+                         </div>
+                       </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
       {report.overall_insight && (
-        <div className="border-t border-white/10 bg-gradient-to-r from-blue-500/10 to-transparent px-4 sm:px-5 py-3">
-          <p className="text-sm text-slate-200 leading-relaxed">
-            <span className="font-semibold text-blue-300">Portfolio Insight:</span> {report.overall_insight}
-          </p>
+        <div className="border-t border-white/10 bg-gradient-to-r from-blue-500/[0.08] to-transparent p-6">
+          <div className="flex gap-4">
+            <div className="h-10 w-1 bg-blue-500 rounded-full" />
+            <div>
+              <span className="text-[10px] uppercase text-blue-400 font-bold tracking-[0.2em] mb-1 block">Institutional Takeaway</span>
+              <p className="text-sm text-slate-200 leading-relaxed font-medium">
+                {report.overall_insight}
+              </p>
+            </div>
+          </div>
         </div>
       )}
     </div>

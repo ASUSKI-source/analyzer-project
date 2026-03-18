@@ -150,6 +150,9 @@ async def get_cached_indicators(
         "sma_20": ti.sma_20,
         "bollinger_upper": ti.bollinger_upper,
         "bollinger_lower": ti.bollinger_lower,
+        "vwap": ti.vwap,
+        "obv": ti.obv,
+        "adx": ti.adx,
         "trend_signal": ti.trend_signal,
     }
 
@@ -271,6 +274,7 @@ async def get_batch_indicators(
                         "macd_histogram": ti_obj.macd_hist, "sma_50": ti_obj.sma_50, "sma_200": ti_obj.sma_200,
                         "ema_9": ti_obj.ema_9, "ema_21": ti_obj.ema_21, "sma_20": ti_obj.sma_20,
                         "bollinger_upper": ti_obj.bollinger_upper, "bollinger_lower": ti_obj.bollinger_lower,
+                        "vwap": ti_obj.vwap, "obv": ti_obj.obv, "adx": ti_obj.adx,
                         "trend_signal": ti_obj.trend_signal,
                     }
                     if ti_obj.rsi is not None:
@@ -334,6 +338,17 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
     bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
     bb_upper = bb.bollinger_hband()
     bb_lower = bb.bollinger_lband()
+    
+    # 5. Volume Indicators
+    # VWAP (Note: Typically used intraday, for daily it's a volume weighted price average)
+    vwap_indicator = ta.volume.VolumeWeightedAveragePrice(high=high, low=low, close=close, volume=df['volume'])
+    vwap = vwap_indicator.volume_weighted_average_price()
+    
+    obv = ta.volume.OnBalanceVolumeIndicator(close=close, volume=df['volume']).on_balance_volume()
+    
+    # 6. Trend Strength (ADX)
+    adx_indicator = ta.trend.ADXIndicator(high=high, low=low, close=close)
+    adx = adx_indicator.adx()
 
     # Trend Signal (Simple heuristic)
     last_close = close.iloc[-1]
@@ -361,5 +376,8 @@ def compute_technical_indicators(candles: List[dict]) -> TechnicalIndicators:
         ema_21=round(ema_21.iloc[-1], 2) if not pd.isna(ema_21.iloc[-1]) else None,
         bollinger_upper=round(bb_upper.iloc[-1], 2) if not pd.isna(bb_upper.iloc[-1]) else None,
         bollinger_lower=round(bb_lower.iloc[-1], 2) if not pd.isna(bb_lower.iloc[-1]) else None,
+        vwap=round(vwap.iloc[-1], 2) if not pd.isna(vwap.iloc[-1]) else None,
+        obv=round(obv.iloc[-1], 2) if not pd.isna(obv.iloc[-1]) else None,
+        adx=round(adx.iloc[-1], 2) if not pd.isna(adx.iloc[-1]) else None,
         trend_signal=signal
     )

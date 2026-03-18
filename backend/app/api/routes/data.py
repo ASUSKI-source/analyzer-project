@@ -17,7 +17,8 @@ from app.schemas.market import (
     TechnicalIndicators,
 )
 from app.services.aggregator import fetch_watchlist_prices, generate_dashboard_pulse
-from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment
+from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment, fetch_institutional_ownership
+from app.services.crypto_onchain import get_crypto_onchain_context
 from app.services.indicators import compute_technical_indicators
 from app.services.market_data import get_asset_history, sync_asset_history
 from app.services.snapshot_read_service import get_snapshot_bundle_for_symbols
@@ -74,9 +75,11 @@ async def get_asset_analysis(
     fundamentals_task = fetch_fundamentals(symbol)
     sentiment_task = fetch_news_sentiment(symbol)
     snapshot_task = get_snapshot_bundle_for_symbols(db, [symbol])
+    inst_task = fetch_institutional_ownership(symbol)
+    onchain_task = get_crypto_onchain_context(symbol)
 
-    price_results, history, fundamentals, sentiment, snapshot_bundle = await asyncio.gather(
-        prices_task, history_task, fundamentals_task, sentiment_task, snapshot_task
+    price_results, history, fundamentals, sentiment, snapshot_bundle, inst_data, onchain_data = await asyncio.gather(
+        prices_task, history_task, fundamentals_task, sentiment_task, snapshot_task, inst_task, onchain_task
     )
 
     # Extract Quote
@@ -117,6 +120,8 @@ async def get_asset_analysis(
         technicals=technicals,
         fundamentals=FundamentalData(**fundamentals),
         sentiment=sentiment,
+        institutional=inst_data if isinstance(inst_data, dict) and inst_data.get("shares_held") else None,
+        on_chain=onchain_data if isinstance(onchain_data, dict) and onchain_data.get("fear_and_greed") else None,
         last_updated=datetime.utcnow().isoformat()
     )
 

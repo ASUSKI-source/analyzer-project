@@ -295,7 +295,8 @@ async def _assemble_data_context(
     """
     from app.services.providers.broker import get_broker
     from app.services.indicators import get_batch_indicators
-    from app.services.finnhub import get_batch_fundamentals
+    from app.services.finnhub import get_batch_fundamentals, fetch_institutional_ownership
+    from app.services.crypto_onchain import get_crypto_onchain_context
     from app.services.snapshot_read_service import get_snapshot_bundle_for_symbols
 
     stage_metrics: Dict[str, Any] = {}
@@ -373,6 +374,9 @@ async def _assemble_data_context(
         _timed_step("indicators",   asyncio.wait_for(indicator_coro, timeout=_i_cap)),
         _timed_step("fundamentals", asyncio.wait_for(fundamentals_coro, timeout=_f_cap)),
         _timed_step("news",         asyncio.wait_for(news_coro, timeout=_n_cap)),
+        # TIER 4: New Premium Layers
+        _timed_step("institutional", asyncio.gather(*[fetch_institutional_ownership(s) for s in symbols], return_exceptions=True)),
+        _timed_step("on_chain",      asyncio.gather(*[get_crypto_onchain_context(s) for s in symbols], return_exceptions=True)),
     ]
 
     # 2. Execute with strict assembly budget
@@ -385,6 +389,8 @@ async def _assemble_data_context(
         ti_batch           = results[1] if not isinstance(results[1], Exception) else {}
         fundamentals_batch = results[2] if not isinstance(results[2], Exception) else []
         news_batch         = results[3] if not isinstance(results[3], Exception) else []
+        inst_batch         = results[4] if not isinstance(results[4], Exception) and len(results) > 4 else []
+        onchain_batch      = results[5] if not isinstance(results[5], Exception) and len(results) > 5 else []
     except asyncio.TimeoutError:
         logger.warning(
             f"{log_prefix} assembly timed out at {budget_seconds:.2f}s for symbols={symbols}. "
@@ -448,6 +454,15 @@ async def _assemble_data_context(
                 news = merged_news
         asset["news_sentiment"] = news
         asset["coverage"] = snapshot_for_symbol.get("coverage", {}) if isinstance(snapshot_for_symbol, dict) else {}
+
+        # New layers: Collate from parallel batches
+        if 'inst_batch' in locals() and isinstance(inst_batch, list) and i < len(inst_batch):
+            ib = inst_batch[i]
+            asset["institutional"] = ib if isinstance(ib, dict) else {}
+        
+        if 'onchain_batch' in locals() and isinstance(onchain_batch, list) and i < len(onchain_batch):
+            ob = onchain_batch[i]
+            asset["on_chain"] = ob if isinstance(ob, dict) else {}
 
         assets.append(asset)
 
@@ -526,10 +541,11 @@ _MASTER_PROMPT = """You are a neutral, data-driven financial analyst with instit
 Ground every claim in the provided data. Be direct; no hype or filler.
 
 ## Analysis Rules
-- **Multi-Horizon Technicals**: 1h EMA-9/21 for tactical entries; 1d SMA-50 for trend; 1w for structural health; 1m for valuation context.
-- **Fundamentals**: Use P/E, EPS, beta to assess quality and valuation risk.
-- **Conflicts**: Flag if weekly is bullish but 1h is overextended ("Tactical Caution").
-- **Crypto**: Skip traditional fundamentals; prioritize on-chain and sentiment context when available.
+- **Technicals**: 1h EMA-9/21 for tactical; 1d SMA-50 for trend; 1w structural. Use VWAP, OBV, and ADX for volume-vetted momentum checks.
+- **Short Squeeze**: For stocks, use Short Interest % and Short Ratio. For crypto, monitor Long/Short Ratio and Open Interest for liquidation cascades.
+- **Institutional**: Cross-reference Institutional Ownership (stocks) and Fear & Greed (crypto) to gauge smart-money sentiment.
+- **Fundamentals**: Use P/E, EPS, beta. For crypto, prioritize on-chain and derivative metrics.
+- **Conflicts**: Flag if volume (OBV) diverges from price or if 1h is overextended.
 - **Missing data**: State it plainly and weight available signals accordingly.
 
 ## Output — return ONLY this JSON, no markdown, no preamble:
@@ -1250,8 +1266,8 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
     # Tighter pruning for larger watchlists to stay under token budget
     keep_tfs = ["1h", "1d", "1w", "1m"] if symbol_count <= 4 else ["1h", "1d", "1w"]
     # Core fields always kept; secondary fields only for small watchlists
-    core_tf_fields = {"trend_signal", "rsi_14", "ema_9", "ema_21", "macd_line", "macd_signal"}
-    full_tf_fields = core_tf_fields | {"sma_50", "sma_200", "sma_20", "bollinger_upper", "bollinger_lower"}
+    core_tf_fields = {"trend_signal", "rsi", "macd", "ema_9", "ema_21"}
+    full_tf_fields = core_tf_fields | {"sma_50", "sma_200", "sma_20", "bollinger_upper", "bollinger_lower", "vwap", "obv", "adx"}
 
     pruned_assets = []
     for asset in assets:
@@ -1305,7 +1321,19 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             if score is not None:
                 pruned_news["sentiment_score"] = round(float(score), 2)
             if pruned_news:
-                pa["news"] = pruned_news
+                pa["news_sentiment"] = pruned_news
+
+        # Institutional
+        raw_inst = asset.get("institutional", {})
+        if isinstance(raw_inst, dict) and raw_inst.get("shares_held"):
+            pa["institutional"] = _strip_nulls(raw_inst)
+
+        # On-chain (Crypto)
+        raw_oc = asset.get("on_chain", {})
+        if isinstance(raw_oc, dict) and raw_oc:
+            pa["on_chain"] = _strip_nulls(raw_oc)
+
+        pruned_assets.append(pa)
 
         # On-chain / derivatives — pass through if present (for future data layers)
         for extra_key in ("on_chain", "derivatives", "short_interest", "institutional"):
