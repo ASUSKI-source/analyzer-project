@@ -52,12 +52,12 @@ async def get_prices(symbols: str = Query(..., description="Comma-separated symb
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not symbol_list:
         return []
-    symbol_list = symbol_list[:20]
+    symbol_list = list(symbol_list)[:20]
     prices = await fetch_watchlist_prices(symbol_list)
     return prices
 
 
-@router.get("/assets/{symbol}/analysis", response_model=AssetAnalysisResponse)
+@router.get("/assets/{symbol:path}/analysis", response_model=AssetAnalysisResponse)
 async def get_asset_analysis(
     symbol: str,
     db: AsyncSession = Depends(get_db),
@@ -131,7 +131,7 @@ async def get_asset_analysis(
     )
 
 
-@router.get("/assets/{symbol}/history", response_model=AssetHistoryResponse)
+@router.get("/assets/{symbol:path}/history", response_model=AssetHistoryResponse)
 async def get_history(
     symbol: str, 
     days: int = 365, 

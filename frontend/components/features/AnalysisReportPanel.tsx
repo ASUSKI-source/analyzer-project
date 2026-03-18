@@ -202,7 +202,8 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
       currentlyLoadingRef.current.add(symbol);
       setAssetDeepLoading((prev) => ({ ...prev, [symbol]: true }));
       try {
-        const res = await fetch(`${API_BASE_URL}/market/assets/${symbol}/analysis`, {
+        const encodedSymbol = encodeURIComponent(symbol);
+        const res = await fetch(`${API_BASE_URL}/market/assets/${encodedSymbol}/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) {
@@ -215,6 +216,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
         loadedSymbolsRef.current.add(symbol);
       } catch (err) {
         console.error(`Deep analysis fetch failed for ${symbol}:`, err);
+        loadedSymbolsRef.current.delete(symbol); // Allow retry
       } finally {
         currentlyLoadingRef.current.delete(symbol);
         setAssetDeepLoading((prev) => ({ ...prev, [symbol]: false }));
@@ -369,9 +371,13 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
     return ranked;
   }, [assetDeepData, assets, sortDir, sortKey, verdictFilter]);
 
-  const selectedAsset =
-    displayedAssets.find((a) => a.symbol === selectedSymbol) || displayedAssets[0] || null;
-  const selectedDeep = assetDeepData[selectedSymbol || selectedAsset?.symbol || ""];
+  const selectedAsset = useMemo(() => {
+    if (!selectedSymbol || !displayedAssets.length) return displayedAssets[0] || null;
+    return displayedAssets.find((a) => a.symbol.toUpperCase() === selectedSymbol.toUpperCase()) || displayedAssets[0] || null;
+  }, [displayedAssets, selectedSymbol]);
+
+  const selectedDeep = assetDeepData[selectedSymbol?.toUpperCase() || selectedAsset?.symbol?.toUpperCase() || ""];
+  const isDeepLoading = selectedSymbol ? assetDeepLoading[selectedSymbol.toUpperCase()] : false;
 
   // Sync internal selection with external prop
   useEffect(() => {
@@ -426,6 +432,15 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
 
     return Math.round((available / Math.max(expected, 1)) * 100);
   }, [displayedAssets]);
+
+  // Pre-fetch top 3 symbols for speed
+  useEffect(() => {
+    if (symbols.length > 0) {
+      symbols.slice(0, 3).forEach(sym => {
+        fetchAssetDeep(sym);
+      });
+    }
+  }, [fetchAssetDeep, symbols]);
 
   const toggleSort = (key: SortKey): void => {
     if (sortKey === key) {
@@ -716,7 +731,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                 <div className="p-4 rounded-xl bg-amber-500/[0.03] border border-amber-500/10">
                   <span className="text-[10px] uppercase text-amber-500 font-bold block mb-2">Tactical Action Note</span>
                   <p className="text-xs text-slate-300 leading-relaxed italic">
-                    "{selectedAsset.action_note || "No specific tactical action required at current levels."}"
+                    "{selectedAsset?.action_note || "No specific tactical action required at current levels."}"
                   </p>
                 </div>
               </div>
@@ -725,7 +740,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
               <div className="lg:w-2/3 min-h-[300px] rounded-2xl bg-white/[0.02] border border-white/5 p-6 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 blur-[100px] rounded-full -translate-y-1/2 translate-x-1/2" />
                 
-                {assetDeepLoading[selectedAsset.symbol] && (
+                {isDeepLoading && (
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-300">
                     <div className="w-12 h-12 rounded-full border-2 border-blue-500/20 border-t-blue-500 animate-spin mb-4" />
                     <span className="text-[10px] uppercase tracking-[0.2em] text-blue-400 font-bold animate-pulse">
@@ -737,7 +752,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                 {activeTab === "signals" && (
                   <div className="space-y-6 animate-in fade-in duration-300">
                     <div className="grid grid-cols-3 gap-4">
-                      {Object.entries(selectedAsset.timeframe_signals || {}).map(([tf, signal]) => (
+                      {Object.entries(selectedAsset?.timeframe_signals || {}).map(([tf, signal]) => (
                         <div key={tf} className="p-3 rounded-xl bg-white/[0.03] border border-white/5">
                           <span className="text-[9px] uppercase text-slate-500 font-bold block mb-1">
                             {tf.replace('strategic_','sm:').replace('trend_','dly:').replace('tactical_','hly:')}
@@ -782,14 +797,20 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                           </div>
                         </section>
                         <section>
-                          <span className="text-[10px] uppercase text-slate-500 font-bold block mb-2">Trend Strength</span>
-                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                             <div className="h-full bg-slate-400" style={{ width: `${selectedDeep?.technicals?.adx || 25}%` }} />
-                          </div>
-                          <div className="flex justify-between mt-1 text-[10px] font-mono text-slate-500">
-                            <span>WEAK</span>
-                            <span className="text-slate-300 font-bold">ADX: {fmt(selectedDeep?.technicals?.adx, 1)}</span>
-                            <span>STRONG</span>
+                          <span className="text-[10px] uppercase text-slate-500 font-bold block mb-2">MACD / EMA Context</span>
+                          <div className="flex gap-2 text-[10px] font-mono">
+                             <div className="flex-1 p-2 rounded-lg bg-white/5 border border-white/10 text-center">
+                                <span className="text-slate-500 block">MACD</span>
+                                <span className={signalClass(selectedDeep?.technicals?.trend_signal)}>
+                                  {selectedDeep?.technicals?.macd || "-"}
+                                </span>
+                             </div>
+                             <div className="flex-1 p-2 rounded-lg bg-white/5 border border-white/10 text-center">
+                                <span className="text-slate-500 block">EMA</span>
+                                <span className={signalClass(selectedDeep?.technicals?.trend_signal)}>
+                                  {selectedDeep?.technicals?.ema_9 || "-"}
+                                </span>
+                             </div>
                           </div>
                         </section>
                       </div>
