@@ -19,7 +19,7 @@ from app.schemas.market import (
 from app.services.aggregator import fetch_watchlist_prices, generate_dashboard_pulse
 from app.services.finnhub import fetch_fundamentals, fetch_news_sentiment, fetch_institutional_ownership
 from app.services.crypto_onchain import get_crypto_onchain_context
-from app.services.indicators import compute_technical_indicators
+from app.services.indicators import compute_technical_indicators, get_cached_indicators
 from app.services.market_data import get_asset_history, sync_asset_history
 from app.services.snapshot_read_service import get_snapshot_bundle_for_symbols
 from app.tasks.snapshot_tasks import (
@@ -64,60 +64,49 @@ async def get_asset_analysis(
     _current_user: User = Depends(get_current_user),
 ):
     """
-    Ultimate Deep-Dive: Fetches Price, Technicals, Fundamentals, and Sentiment in parallel.
-    Future-proofed for predictive modules and advanced UI widgets.
+    Deep-Dive: Fetches Price, Technicals, Fundamentals, and Sentiment in parallel.
+    Technicals use the proven get_cached_indicators path (same as AI analyzer).
     """
     symbol = symbol.upper()
-    
-    # Fetch data concurrently to minimize latency
+
+    # Fetch data concurrently
     prices_task = fetch_watchlist_prices([symbol])
-    history_task = get_asset_history(db=db, symbol=symbol, days=250)
     fundamentals_task = fetch_fundamentals(symbol)
     sentiment_task = fetch_news_sentiment(symbol)
-    snapshot_task = get_snapshot_bundle_for_symbols(db, [symbol])
     inst_task = fetch_institutional_ownership(symbol)
     onchain_task = get_crypto_onchain_context(symbol)
+    # Use the same proven indicators path as the AI analyzer
+    indicators_task = get_cached_indicators(symbol, "1d", db)
 
-    price_results, history, fundamentals, sentiment, snapshot_bundle, inst_data, onchain_data = await asyncio.gather(
-        prices_task, history_task, fundamentals_task, sentiment_task, snapshot_task, inst_task, onchain_task
+    price_results, fundamentals, sentiment, inst_data, onchain_data, ind_payload = await asyncio.gather(
+        prices_task, fundamentals_task, sentiment_task, inst_task, onchain_task, indicators_task
     )
 
     # Extract Quote
     quote_data = price_results[0] if price_results else {"symbol": symbol, "price": 0, "changePercent": 0}
     quote = MarketQuote(**quote_data)
 
-    # Re-fetch history if quote price is available to align chart
-    # (The first task might have been mock, but we use the best available price here)
-    history = await get_asset_history(db=db, symbol=symbol, days=250, current_price=quote.price)
-
-    # Technicals: snapshot-first with fallback computation.
-    technicals_payload = {}
-    if isinstance(snapshot_bundle, dict):
-        technicals_payload = (
-            snapshot_bundle.get(symbol, {})
-            .get("technicals_by_timeframe", {})
-            .get("1d", {})
-        )
-    if technicals_payload:
+    # Build TechnicalIndicators from the cached indicator payload
+    if ind_payload:
         technicals = TechnicalIndicators(
-            rsi=technicals_payload.get("rsi_14"),
-            macd=technicals_payload.get("macd_line"),
-            macd_signal=technicals_payload.get("macd_signal"),
-            macd_hist=technicals_payload.get("macd_histogram"),
-            sma_20=technicals_payload.get("sma_20"),
-            sma_50=technicals_payload.get("sma_50"),
-            sma_200=technicals_payload.get("sma_200"),
-            ema_9=technicals_payload.get("ema_9"),
-            ema_21=technicals_payload.get("ema_21"),
-            bollinger_upper=technicals_payload.get("bollinger_upper"),
-            bollinger_lower=technicals_payload.get("bollinger_lower"),
-            vwap=technicals_payload.get("vwap"),
-            obv=technicals_payload.get("obv"),
-            adx=technicals_payload.get("adx"),
-            trend_signal=technicals_payload.get("trend_signal") or "Neutral",
+            rsi=ind_payload.get("rsi_14"),
+            macd=ind_payload.get("macd_line"),
+            macd_signal=ind_payload.get("macd_signal"),
+            macd_hist=ind_payload.get("macd_histogram"),
+            sma_20=ind_payload.get("sma_20"),
+            sma_50=ind_payload.get("sma_50"),
+            sma_200=ind_payload.get("sma_200"),
+            ema_9=ind_payload.get("ema_9"),
+            ema_21=ind_payload.get("ema_21"),
+            bollinger_upper=ind_payload.get("bollinger_upper"),
+            bollinger_lower=ind_payload.get("bollinger_lower"),
+            vwap=ind_payload.get("vwap"),
+            obv=ind_payload.get("obv"),
+            adx=ind_payload.get("adx"),
+            trend_signal=ind_payload.get("trend_signal") or "Neutral",
         )
     else:
-        technicals = compute_technical_indicators(history)
+        technicals = TechnicalIndicators(trend_signal="Neutral")
 
     return AssetAnalysisResponse(
         symbol=symbol,

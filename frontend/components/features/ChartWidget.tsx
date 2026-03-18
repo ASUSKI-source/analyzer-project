@@ -159,6 +159,10 @@ export function ChartWidget({
   useEffect(() => {
     if (!seriesRef.current || !volumeSeriesRef.current || !chartRef.current) return;
 
+    // Clear stale ref immediately when symbol/days changes (prevents ghost live-tick updates)
+    lastBarRef.current = null;
+    intervalSecondsRef.current = days <= 1 ? 60 : 86400;
+
     const loadData = async (isRefreshed: boolean = false) => {
       setLoading(true);
       setError(null);
@@ -166,7 +170,10 @@ export function ChartWidget({
         const response = await fetchAssetHistory(symbol, days, isRefreshed);
         if (response && response.data && response.data.length > 0) {
           const data = response.data;
-          intervalSecondsRef.current = response.interval_seconds || 86400;
+          // For 1-day view, ALWAYS treat as 1-minute regardless of what backend says
+          // This prevents DB daily-candle fallback from corrupting the live-tick update logic
+          const backendInterval = response.interval_seconds || 86400;
+          intervalSecondsRef.current = days <= 1 ? 60 : backendInterval;
 
           const getTs = (t: string | number) => typeof t === 'number' ? t : Math.floor(new Date(t).getTime() / 1000);
           const sorted = [...data].sort((a, b) => getTs(a.time) - getTs(b.time));
