@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -550,25 +551,25 @@ Ground every claim in the provided data. Be direct; no hype or filler.
 
 ## Output — return ONLY this JSON, no markdown, no preamble:
 {
-  "market_summary": "1-2 sentence macro overview",
+  "market_summary": "Terse, 1-sentence macro overview",
   "watchlist_health": "STRONG|MODERATE|WEAK|MIXED",
   "risk_level": "LOW|MODERATE|HIGH",
-  "tactical_outlook": "Immediate 1-5 day momentum summary",
-  "strategic_horizon": "Long-term structural trend summary",
+  "tactical_outlook": "Terse, 1-sentence momentum summary",
+  "strategic_horizon": "Terse, 1-sentence structural trend summary",
   "assets": [
     {
       "symbol": "TICKER",
       "verdict": "BULLISH|BEARISH|NEUTRAL|CAUTION",
       "timeframe_signals": {"tactical_1h": "Bullish|Bearish|Neutral", "trend_1d": "Bullish|Bearish|Neutral", "strategic_1w": "Bullish|Bearish|Neutral"},
       "key_metrics": {"rsi_daily": 0.0, "pe_ratio": 0.0, "macd_signal": "Bullish|Bearish|Neutral"},
-      "analysis_bullets": ["Tactical: ...", "Trend: ...", "Strategic: ...", "Fundamental/Catalyst: ..."],
-      "catalyst": "Upcoming event or key level",
-      "action_note": "Concise, educational observation"
+      "analysis_bullets": ["Max 3 concise, data-backed bullet points"],
+      "catalyst": "Concise key level or event",
+      "action_note": "Terse, 1-sentence observation"
     }
   ],
-  "overall_insight": "2-3 sentence portfolio-level takeaway"
+  "overall_insight": "Terse, 1-2 sentence portfolio takeaway"
 }
-Rules: Start with '{', end with '}'. Valid JSON only. No markdown fences."""
+Rules: Start with '{', end with '}'. Valid JSON only. Use extremely direct, concise language. No filler."""
 
 
 async def _call_anthropic(
@@ -680,7 +681,7 @@ Provide your analysis following the output format specified in your system instr
                 "%s primary model output was not valid JSON. len=%s first_200=%s",
                 log_prefix,
                 len(text),
-                text[:200],
+                str(text)[:200],
             )
 
             # Formatter retry: convert narrative output into strict JSON schema.
@@ -1007,13 +1008,13 @@ def _parse_ai_json_response_with_mode(
     # If we find at least a start, try to recover
     if start_idx != -1:
         if end_idx != -1 and end_idx > start_idx:
-            window = text[start_idx : end_idx + 1]
+            window = str(text)[start_idx : end_idx + 1]
             p_win = _try_load(window)
             if p_win is not None:
                 return p_win, "window"
         else:
             # Only start found? Maybe truncated. Use from start to end of string
-            window = text[start_idx:]
+            window = str(text)[start_idx:]
             
         # Attempt 4: Deterministic normalization
         normalized = (
@@ -1334,7 +1335,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             cleaned_list = [_strip_nulls(i) for i in obj if i is not None]
             return [i for i in cleaned_list if i != {} and i != []]
         if isinstance(obj, float):
-            return round(float(obj), 2)
+            return float(round(obj, 2))
         return obj
 
     assets = context.get("assets", [])
@@ -1413,5 +1414,5 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "assets": pruned_assets,
         "timestamp": context.get("timestamp"),
-        "watchlist_size": symbol_count,
+        "watchlist_size": int(symbol_count),
     }

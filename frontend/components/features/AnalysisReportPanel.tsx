@@ -105,6 +105,7 @@ interface AssetDeepAnalysis {
     futures_sentiment?: {
       long_short_ratio: number;
       open_interest: number;
+      funding_rate?: number;
     };
   };
   last_updated?: string;
@@ -188,13 +189,17 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
   const [assetDeepData, setAssetDeepData] = useState<Record<string, AssetDeepAnalysis>>({});
   const [assetDeepLoading, setAssetDeepLoading] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<"signals" | "technicals" | "fundamentals" | "squeeze" | "macro">("signals");
+  const loadedSymbolsRef = React.useRef<Set<string>>(new Set());
+  const currentlyLoadingRef = React.useRef<Set<string>>(new Set());
 
   const fetchAssetDeep = useCallback(
     async (symbol: string): Promise<void> => {
-      if (!symbol || assetDeepData[symbol] || assetDeepLoading[symbol]) return;
+      if (!symbol || loadedSymbolsRef.current.has(symbol) || currentlyLoadingRef.current.has(symbol)) return;
+      
       const token = localStorage.getItem("token");
       if (!token) return;
 
+      currentlyLoadingRef.current.add(symbol);
       setAssetDeepLoading((prev) => ({ ...prev, [symbol]: true }));
       try {
         const res = await fetch(`${API_BASE_URL}/market/assets/${symbol}/analysis`, {
@@ -203,13 +208,15 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
         if (!res.ok) return;
         const data: AssetDeepAnalysis = await res.json();
         setAssetDeepData((prev) => ({ ...prev, [symbol]: data }));
+        loadedSymbolsRef.current.add(symbol);
       } catch (err) {
         console.error(`Deep analysis fetch failed for ${symbol}:`, err);
       } finally {
+        currentlyLoadingRef.current.delete(symbol);
         setAssetDeepLoading((prev) => ({ ...prev, [symbol]: false }));
       }
     },
-    [assetDeepData, assetDeepLoading],
+    [], 
   );
 
   const pollJobUntilDone = useCallback(async (jobId: string): Promise<AIReport | null> => {

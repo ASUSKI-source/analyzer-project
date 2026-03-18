@@ -106,12 +106,18 @@ class InstitutionalOwnership(BaseModel):
     institution_count: Optional[int] = None
     top_holder: Optional[str] = None
 
-class CryptoOnChain(BaseModel):
-    fear_and_greed_score: Optional[int] = None
-    fear_and_greed_label: Optional[str] = None
+class FearAndGreed(BaseModel):
+    value: Optional[str] = None
+    value_classification: Optional[str] = None
+
+class FuturesSentiment(BaseModel):
     long_short_ratio: Optional[float] = None
     open_interest: Optional[float] = None
     funding_rate: Optional[float] = None
+
+class CryptoOnChain(BaseModel):
+    fear_and_greed: Optional[FearAndGreed] = None
+    futures_sentiment: Optional[FuturesSentiment] = None
 
 class AssetAnalysisResponse(BaseModel):
     """
