@@ -659,11 +659,10 @@ async def _call_anthropic(
 
 Provide your analysis following the output format specified in your system instructions."""
 
-            # Strategy 4: Reduced max_tokens — Haiku rarely uses full budget; lower = faster.
             text = await _post_messages(
                 system_prompt=_MASTER_PROMPT,
                 content=user_message,
-                max_tokens=900,
+                max_tokens=1200,
                 step_name="primary",
             )
 
@@ -688,10 +687,10 @@ Provide your analysis following the output format specified in your system instr
             remaining = _seconds_remaining(call_deadline)
             if remaining > 1.0:
                 formatter_prompt = (
-                    "Convert the following analysis text into VALID JSON using this schema keys only: "
-                    "market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, assets, overall_insight. "
-                    "For each asset include: symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
-                    "Return JSON only, no markdown, no prose."
+                    "You are a strict JSON formatter. Convert the provided analysis text into valid, parsable JSON. "
+                    "Use ONLY these keys: market_summary, watchlist_health, risk_level, tactical_outlook, strategic_horizon, assets, overall_insight. "
+                    "For each asset, include these keys: symbol, verdict, timeframe_signals, key_metrics, analysis_bullets, catalyst, action_note. "
+                    "If the text is cut off, close the JSON object and arrays properly. Return JSON ONLY."
                 )
                 formatted_text = await _post_messages(
                     system_prompt="You are a strict JSON formatter.",
@@ -737,7 +736,7 @@ Provide your analysis following the output format specified in your system instr
                 text = await _post_messages(
                     system_prompt="You are a concise, strictly-JSON-generating single-asset analyst.",
                     content=content,
-                    max_tokens=250,  # Strategy 4: reduced from 320
+                    max_tokens=350,
                     step_name=f"asset_{sym}",
                 )
                 parsed, parse_mode = _parse_ai_json_response_with_mode(
@@ -809,7 +808,7 @@ Follow the output schema described in your system instructions."""
         text = await _post_messages(
             system_prompt=_MASTER_PROMPT,
             content=user_message,
-            max_tokens=750,  # Strategy 4: reduced from 900
+            max_tokens=1250,
             step_name="portfolio_synthesis",
         )
 
@@ -1323,19 +1322,7 @@ def _prune_context(context: Dict[str, Any]) -> Dict[str, Any]:
             if pruned_news:
                 pa["news_sentiment"] = pruned_news
 
-        # Institutional
-        raw_inst = asset.get("institutional", {})
-        if isinstance(raw_inst, dict) and raw_inst.get("shares_held"):
-            pa["institutional"] = _strip_nulls(raw_inst)
-
-        # On-chain (Crypto)
-        raw_oc = asset.get("on_chain", {})
-        if isinstance(raw_oc, dict) and raw_oc:
-            pa["on_chain"] = _strip_nulls(raw_oc)
-
-        pruned_assets.append(pa)
-
-        # On-chain / derivatives — pass through if present (for future data layers)
+        # Extra data layers — pass through if present
         for extra_key in ("on_chain", "derivatives", "short_interest", "institutional"):
             extra = asset.get(extra_key)
             if extra and isinstance(extra, dict):
