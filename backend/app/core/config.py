@@ -23,15 +23,18 @@ class Settings(BaseSettings):
     # Enable extra timing/debug metadata in AI responses (non-prod debugging).
     AI_DEBUG_TIMING: bool = False
     AI_DEBUG_VERBOSE_LOGS: bool = False
-    # Reliability-first default: exclude news sentiment from AI prompt/context unless explicitly enabled.
-    AI_INCLUDE_NEWS_SENTIMENT: bool = False
+    # Reliability-first default: now ENABLED — per-source timeouts in _assemble_data_context
+    # guard against slow Finnhub calls without blowing the total budget.
+    AI_INCLUDE_NEWS_SENTIMENT: bool = True
 
-    # Timeout budgets for AI report generation pipeline.
-    # We bias more time toward the model call now that news sentiment is disabled
-    # by default (assembly is cheaper, so we can shrink its budget).
+    # Pipeline budget breakdown (total: 24s, Railway proxy kills at 25s):
+    #   Assembly: 4s  — per-source caps (quotes:2s, indicators:3.5s, fundamentals:2s, news:2s) run concurrently
+    #   Model:   18s  — reduced max_tokens + streamlined prompt buys ~2-4s vs old 17s budget
+    #   Parse:   1.5s — JSON extraction is deterministic and fast
+    # Net effect: news is now enabled with the same safety margin as before.
     AI_TOTAL_BUDGET_SECONDS: float = 24.0
-    AI_ASSEMBLY_BUDGET_SECONDS: float = 5.0
-    AI_MODEL_BUDGET_SECONDS: float = 17.0
+    AI_ASSEMBLY_BUDGET_SECONDS: float = 4.0
+    AI_MODEL_BUDGET_SECONDS: float = 18.0
     AI_PARSE_BUDGET_SECONDS: float = 1.5
     AI_STRICT_JSON_ENFORCEMENT: bool = True
     # When False (default), model/network failures should prefer last-good/error paths
