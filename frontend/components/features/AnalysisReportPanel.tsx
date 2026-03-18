@@ -205,8 +205,12 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
         const res = await fetch(`${API_BASE_URL}/market/assets/${symbol}/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+           console.error(`Deep analysis error for ${symbol}: ${res.status}`);
+           return;
+        }
         const data: AssetDeepAnalysis = await res.json();
+        console.log(`Deep analysis data for ${symbol}:`, data);
         setAssetDeepData((prev) => ({ ...prev, [symbol]: data }));
         loadedSymbolsRef.current.add(symbol);
       } catch (err) {
@@ -367,7 +371,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
 
   const selectedAsset =
     displayedAssets.find((a) => a.symbol === selectedSymbol) || displayedAssets[0] || null;
-  const selectedDeep = selectedAsset ? assetDeepData[selectedAsset.symbol] : undefined;
+  const selectedDeep = assetDeepData[selectedSymbol || selectedAsset?.symbol || ""];
 
   // Sync internal selection with external prop
   useEffect(() => {

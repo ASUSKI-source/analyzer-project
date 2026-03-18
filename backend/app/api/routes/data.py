@@ -109,6 +109,11 @@ async def get_asset_analysis(
             sma_200=technicals_payload.get("sma_200"),
             ema_9=technicals_payload.get("ema_9"),
             ema_21=technicals_payload.get("ema_21"),
+            bollinger_upper=technicals_payload.get("bollinger_upper"),
+            bollinger_lower=technicals_payload.get("bollinger_lower"),
+            vwap=technicals_payload.get("vwap"),
+            obv=technicals_payload.get("obv"),
+            adx=technicals_payload.get("adx"),
             trend_signal=technicals_payload.get("trend_signal") or "Neutral",
         )
     else:

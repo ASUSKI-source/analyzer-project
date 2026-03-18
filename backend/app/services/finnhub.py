@@ -311,7 +311,7 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
             # Short Squeeze Metrics
             "short_interest": metrics.get("shortInterest"),
             "short_ratio": metrics.get("shortRatio"),
-            "float_shares": metrics.get("sharesFloat"),
+            "shares_float": metrics.get("sharesFloat"),
             "free_float": metrics.get("freeFloat"),
             "description": f"Fundamental and Short data for {symbol}"
         }
