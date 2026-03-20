@@ -463,7 +463,20 @@ async def _assemble_data_context(
         
         if 'onchain_batch' in locals() and isinstance(onchain_batch, list) and i < len(onchain_batch):
             ob = onchain_batch[i]
+            # FIX: Use 'ob' for type check, not 'ib'
             asset["on_chain"] = ob if isinstance(ob, dict) else {}
+            # Map futures_sentiment to 'derivatives' for AI context alignment
+            if isinstance(ob, dict) and "futures_sentiment" in ob:
+                asset["derivatives"] = ob["futures_sentiment"]
+
+        # Map short metrics from fundamentals to 'short_interest' for AI context alignment
+        if "short_interest" in fund or "short_ratio" in fund:
+            asset["short_interest"] = {
+                "short_interest": fund.get("short_interest"),
+                "short_ratio": fund.get("short_ratio"),
+                "shares_float": fund.get("shares_float"),
+                "free_float": fund.get("free_float"),
+            }
 
         assets.append(asset)
 
