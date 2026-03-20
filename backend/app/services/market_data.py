@@ -106,34 +106,116 @@ async def sync_asset_history(db: AsyncSession, symbol: str, days: int = 365, tim
     await db.commit()
     return len(candles)
 
-            # Save to DB for permanent high-fidelity fallback
-            if chart_data:
-                try:
-                    asset_obj = await get_or_create_asset(db, symbol_upper)
-                    db_candles = []
-                    for d in chart_data:
-                        db_candles.append({
-                            "asset_id": asset_obj.id,
-                            "timestamp": datetime.fromtimestamp(d["time"], tz=timezone.utc),
-                            "timeframe": timeframe,
-                            "open": d["open"],
-                            "high": d["high"],
-                            "low": d["low"],
-                            "close": d["close"],
-                            "volume": d["value"],
-                        })
-                    
-                    if db_candles:
-                        stmt = insert(AssetCandle).values(db_candles)
-                        stmt = stmt.on_conflict_do_nothing(index_elements=['asset_id', 'timestamp', 'timeframe'])
-                        await db.execute(stmt)
-                        await db.commit()
-                        logger.info(f"Persisted {len(db_candles)} {timeframe} candles to DB for {symbol_upper}")
-                except Exception as db_err:
-                    logger.warning(f"Failed to persist live intraday for {symbol_upper}: {db_err}")
+async def get_live_intraday_history(db: AsyncSession, symbol: str, days: int):
+    """
+    Fetch high-fidelity intraday candles with Layer 2 "Heat Cache" and Layer 1 "Global Barrier".
+    """
+    symbol_upper = symbol.upper()
+    
+    # Layer 2: Intraday Heat Cache (300s)
+    cache_key = f"intraday_cache:{symbol_upper}:{days}"
+    cached_data = await cache_client.get(cache_key)
+    if cached_data:
+        # If it's the new tuple format [data, interval], return it
+        if isinstance(cached_data, list) and len(cached_data) == 2 and isinstance(cached_data[1], int):
+            return cached_data
+        # Legacy cache compatibility: default to a reasonable interval if old data found
+        return cached_data, 300 if days <= 1 else 3600
 
-            # Save to Heat Cache
-            await cache_client.set(cache_key, [chart_data, interval_seconds], expire_seconds=300)
+    chart_data = []
+    interval_seconds = 3600 # default
+    try:
+        from app.services.coingecko import is_crypto, SYMBOL_TO_BINANCE
+        
+        # Determine timeframe for DB persistence
+        if days <= 1:
+            timeframe = "1m"
+        elif days <= 7:
+            timeframe = "1h"
+        else:
+            timeframe = "1d"
+
+        if is_crypto(symbol_upper):
+            b_id = SYMBOL_TO_BINANCE.get(symbol_upper)
+            if not b_id: return [], 0
+            
+            # Refined Intervals: 1D -> 1m, 1W -> 30m
+            if days <= 1:
+                interval, limit, interval_seconds = ("1m", 1440, 60)
+            elif days <= 7:
+                interval, limit, interval_seconds = ("30m", 336, 1800)
+            elif days <= 30:
+                interval, limit, interval_seconds = ("4h", 180, 14400)
+            else:
+                interval, limit, interval_seconds = ("1d", min(days, 1000), 86400)
+
+            url = "https://api.binance.us/api/v3/klines"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.get(url, params={"symbol": b_id, "interval": interval, "limit": limit})
+                res.raise_for_status()
+                for k in res.json():
+                    chart_data.append({"time": int(k[0]) // 1000, "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]), "value": float(k[5])})
+        else:
+            # Layer 1: Polygon Global Barrier
+            priority = 2 if days <= 1 else 1
+            if not await PolygonRateLimiter.acquire_token(priority=priority):
+                logger.warning(f"Throttling live intraday for {symbol_upper} to preserve API tokens.")
+                return [], 0
+
+            # Refined Intervals: 1D -> 1m, 1W -> 30m
+            if days <= 1:
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (1, "minute", 1, 1440, 60)
+            elif days <= 7:
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (30, "minute", 8, 336, 1800)
+            elif days <= 30:
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (4, "hour", 40, 180, 14400)
+            else:
+                multiplier, timespan, lookback, limit_candles, interval_seconds = (1, "day", days + 10, days, 86400)
+
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=lookback)
+            
+            url = f"https://api.polygon.io/v2/aggs/ticker/{symbol_upper}/range/{multiplier}/{timespan}/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.get(url, params={"adjusted": "true", "sort": "asc", "apiKey": settings.POLYGON_API_KEY})
+                res.raise_for_status()
+                data = res.json()
+                results = data.get("results", [])[-limit_candles:] if data.get("results") else []
+                
+                for item in results:
+                    chart_data.append({
+                        "time": int(item["t"]) // 1000,
+                        "open": float(item["o"]), "high": float(item["h"]), "low": float(item["l"]), "close": float(item["c"]), "value": float(item["v"])
+                    })
+        
+        # Save to DB for permanent high-fidelity fallback
+        if chart_data:
+            try:
+                asset_obj = await get_or_create_asset(db, symbol_upper)
+                db_candles = []
+                for d in chart_data:
+                    db_candles.append({
+                        "asset_id": asset_obj.id,
+                        "timestamp": datetime.fromtimestamp(d["time"], tz=timezone.utc),
+                        "timeframe": timeframe,
+                        "open": d["open"],
+                        "high": d["high"],
+                        "low": d["low"],
+                        "close": d["close"],
+                        "volume": d["value"],
+                    })
+                
+                if db_candles:
+                    stmt = insert(AssetCandle).values(db_candles)
+                    stmt = stmt.on_conflict_do_nothing(index_elements=['asset_id', 'timestamp', 'timeframe'])
+                    await db.execute(stmt)
+                    await db.commit()
+                    logger.info(f"Persisted {len(db_candles)} {timeframe} candles to DB for {symbol_upper}")
+            except Exception as db_err:
+                logger.warning(f"Failed to persist live intraday for {symbol_upper}: {db_err}")
+
+        # Save to Heat Cache
+        await cache_client.set(cache_key, [chart_data, interval_seconds], expire_seconds=300)
 
     except Exception as e:
         logger.error(f"Live Intraday error for {symbol_upper}: {e}")
