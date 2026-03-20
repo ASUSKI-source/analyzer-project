@@ -69,17 +69,18 @@ async def get_asset_analysis(
     """
     symbol = symbol.upper()
 
-    # Fetch data concurrently
-    prices_task = fetch_watchlist_prices([symbol])
-    fundamentals_task = fetch_fundamentals(symbol)
+    price_results = await fetch_watchlist_prices([symbol])
+    current_price = price_results[0].get("price") if price_results else None
+
+    # Fetch remaining data concurrently
+    fundamentals_task = fetch_fundamentals(symbol, current_price=current_price)
     sentiment_task = fetch_news_sentiment(symbol)
     inst_task = fetch_institutional_ownership(symbol)
     onchain_task = get_crypto_onchain_context(symbol)
-    # Use the same proven indicators path as the AI analyzer
-    indicators_task = get_cached_indicators(symbol, "1d", db)
+    indicators_task = get_cached_indicators(db, symbol, "1d")
 
-    price_results, fundamentals, sentiment, inst_data, onchain_data, ind_payload = await asyncio.gather(
-        prices_task, fundamentals_task, sentiment_task, inst_task, onchain_task, indicators_task
+    fundamentals, sentiment, inst_data, onchain_data, ind_payload = await asyncio.gather(
+        fundamentals_task, sentiment_task, inst_task, onchain_task, indicators_task
     )
 
     # Extract Quote

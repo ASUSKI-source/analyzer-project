@@ -30,10 +30,12 @@ interface AssetAnalysis {
     trend_1d: string;
     strategic_1w: string;
   };
+  is_crypto?: boolean;
   key_metrics: {
     rsi_daily?: number;
     pe_ratio?: number;
     eps?: number;
+    long_short_ratio?: number;
     macd_signal?: string;
     ema_signal?: string;
   };
@@ -667,34 +669,45 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                   ))}
                 </div>
 
-                <div className="flex items-center justify-between items-end mt-3">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] text-slate-500 uppercase font-bold">RSI</span>
-                    <span className={`text-[11px] font-bold ${
-                      (asset.key_metrics?.rsi_daily ?? 50) > 70 ? "text-red-400" :
-                      (asset.key_metrics?.rsi_daily ?? 50) < 30 ? "text-green-400" : "text-slate-300"
-                    }`}>
-                      {fmt(asset.key_metrics?.rsi_daily, 0)}
-                    </span>
-                  </div>
+                  <div className="flex items-center justify-between items-end mt-3">
+                    {asset.is_crypto ? (
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">L/S Ratio</span>
+                        <span className="text-[11px] font-bold text-slate-300">
+                          {fmt(asset.key_metrics?.long_short_ratio, 2)}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">RSI</span>
+                        <span className={`text-[11px] font-bold ${
+                          (asset.key_metrics?.rsi_daily ?? 50) > 70 ? "text-red-400" :
+                          (asset.key_metrics?.rsi_daily ?? 50) < 30 ? "text-green-400" : "text-slate-300"
+                        }`}>
+                          {fmt(asset.key_metrics?.rsi_daily, 0)}
+                        </span>
+                      </div>
+                    )}
 
-                  <div className="flex gap-4">
-                    <div className="flex flex-col items-center">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">P/E</span>
-                      <span className="text-[11px] font-bold text-slate-300">
-                        {fmt(asset.key_metrics?.pe_ratio, 1)}
-                      </span>
-                    </div>
-                    <div className="flex flex-col items-center">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold">EPS</span>
-                      <span className="text-[11px] font-bold text-slate-300">
-                        {fmt(asset.key_metrics?.eps, 2)}
-                      </span>
-                    </div>
-                  </div>
+                    {!asset.is_crypto && (
+                      <div className="flex gap-4">
+                        <div className="flex flex-col items-center">
+                          <span className="text-[9px] text-slate-500 uppercase font-bold">P/E</span>
+                          <span className="text-[11px] font-bold text-slate-300">
+                            {fmt(asset.key_metrics?.pe_ratio, 1)}
+                          </span>
+                        </div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-[9px] text-slate-500 uppercase font-bold">EPS</span>
+                          <span className="text-[11px] font-bold text-slate-300">
+                            {fmt(asset.key_metrics?.eps, 2)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
-                  <ArrowRight className={`w-3.5 h-3.5 text-slate-600 transition-transform group-hover:translate-x-0.5 ${isSelected ? "text-blue-400" : ""}`} />
-                </div>
+                    <ArrowRight className={`w-3.5 h-3.5 text-slate-600 transition-transform group-hover:translate-x-0.5 ${isSelected ? "text-blue-400" : ""}`} />
+                  </div>
 
                 {isSelected && (
                   <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-8 h-1 bg-blue-500 rounded-full" />
@@ -863,7 +876,7 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                           { l: "EPS", v: fmt(selectedDeep?.fundamentals?.eps, 2) },
                           { l: "Beta", v: fmt(selectedDeep?.fundamentals?.beta, 2) },
                           { l: "Div Yield", v: `${fmt(selectedDeep?.fundamentals?.dividend_yield, 2)}%` },
-                          { l: "52W Range", v: `${fmt(selectedDeep?.fundamentals?.low_52week, 0)} - ${fmt(selectedDeep?.fundamentals?.high_52week, 0)}` }
+                          { l: "52W Range", v: `${fmt(selectedDeep?.fundamentals?.low_52week, 2)} - ${fmt(selectedDeep?.fundamentals?.high_52week, 2)}` }
                         ].map((m, i) => (
                           <div key={i} className="p-3 rounded-xl bg-white/[0.03] border border-white/5">
                             <span className="text-[10px] uppercase text-slate-500 font-bold block mb-1">{m.l}</span>

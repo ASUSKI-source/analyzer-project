@@ -404,9 +404,11 @@ async def _assemble_data_context(
     price_map = {p["symbol"]: p for p in prices if isinstance(p, dict) and "symbol" in p} if isinstance(prices, list) else {}
     stale_price_count: int = 0
     
+    from app.services.coingecko import is_crypto
     assets = []
     for i, sym in enumerate(symbols):
-        asset: Dict[str, Any] = {"symbol": sym}
+        is_c = is_crypto(sym)
+        asset: Dict[str, Any] = {"symbol": sym, "is_crypto": is_c}
 
         # Price
         price_data = price_map.get(sym, {})
@@ -572,9 +574,10 @@ Ground every claim in the provided data. Be direct; no hype or filler.
   "assets": [
     {
       "symbol": "TICKER",
+      "is_crypto": true|false,
       "verdict": "BULLISH|BEARISH|NEUTRAL|CAUTION",
       "timeframe_signals": {"tactical_1h": "Bullish|Bearish|Neutral", "trend_1d": "Bullish|Bearish|Neutral", "strategic_1w": "Bullish|Bearish|Neutral"},
-      "key_metrics": {"rsi_daily": 0.0, "pe_ratio": 0.0, "eps": 0.0, "macd_signal": "Bullish|Bearish|Neutral"},
+      "key_metrics": {"rsi_daily": 0.0, "pe_ratio": 0.0, "eps": 0.0, "long_short_ratio": 0.0, "macd_signal": "Bullish|Bearish|Neutral"},
       "analysis_bullets": ["Max 3 concise, data-backed bullet points"],
       "catalyst": "Concise key level or event",
       "action_note": "Terse, 1-sentence observation"
@@ -1277,9 +1280,12 @@ def _normalize_asset(asset: Dict[str, Any]) -> Dict[str, Any]:
             "trend_1d": _safe_text(timeframe_signals.get("trend_1d"), "Neutral"),
             "strategic_1w": _safe_text(timeframe_signals.get("strategic_1w"), "Neutral"),
         },
+        "is_crypto": bool(asset.get("is_crypto", False)),
         "key_metrics": {
             "rsi_daily": key_metrics.get("rsi_daily"),
             "pe_ratio": key_metrics.get("pe_ratio"),
+            "eps": key_metrics.get("eps"),
+            "long_short_ratio": key_metrics.get("long_short_ratio"),
             "macd_signal": _safe_text(key_metrics.get("macd_signal"), "Neutral"),
         },
         "analysis_bullets": analysis_bullets,
@@ -1302,7 +1308,7 @@ def _enforce_report_schema(report: Dict[str, Any], symbols: List[str], strict: b
         logger.warning("strict schema repair engaged missing_keys=%s", sorted(missing))
 
     if not assets and symbols:
-        assets = [{"symbol": s, "verdict": "NEUTRAL", "timeframe_signals": {"tactical_1h": "Neutral", "trend_1d": "Neutral", "strategic_1w": "Neutral"}, "key_metrics": {"rsi_daily": None, "pe_ratio": None, "macd_signal": "Neutral"}, "analysis_bullets": ["Data was incomplete during generation."], "catalyst": "No catalyst available.", "action_note": "Wait for a refreshed analysis."} for s in symbols]
+        assets = [{"symbol": s, "verdict": "NEUTRAL", "timeframe_signals": {"tactical_1h": "Neutral", "trend_1d": "Neutral", "strategic_1w": "Neutral"}, "key_metrics": {"rsi_daily": None, "pe_ratio": None, "eps": None, "macd_signal": "Neutral"}, "analysis_bullets": ["Data was incomplete during generation."], "catalyst": "No catalyst available.", "action_note": "Wait for a refreshed analysis."} for s in symbols]
 
     return {
         "market_summary": _safe_text(payload.get("market_summary"), "Markets are mixed and require selective positioning."),

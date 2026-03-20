@@ -263,9 +263,10 @@ async def get_batch_earnings_events(symbols: List[str]) -> List[List[Dict[str, A
 
 # ─── FUNDAMENTALS ────────────────────────────────────────────────────────────
 
-async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
+async def fetch_fundamentals(symbol: str, current_price: Optional[float] = None) -> Dict[str, Any]:
     """
-    Fetch fundamental metrics from Finnhub with individual circuit breaker.
+    Fetch fundamental data (P/E, EPS, Market Cap) from Finnhub.
+    Scales market_cap from Millions to absolute units.
     """
     symbol = symbol.upper()
     
@@ -277,10 +278,10 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
 
     # 2. Check Circuit Breaker
     if await cache_client.get("circuit_breaker:finnhub"):
-        return _fundamental_fallback(symbol)
+        return _fundamental_fallback(symbol, current_price)
 
     if not _has_valid_key():
-        return _fundamental_fallback(symbol)
+        return _fundamental_fallback(symbol, current_price)
 
     url = "https://finnhub.io/api/v1/stock/metric"
 
@@ -301,7 +302,7 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
         metrics = data.get("metric", {})
 
         result = {
-            "market_cap": metrics.get("marketCapitalization"),
+            "market_cap": (metrics.get("marketCapitalization") or 0) * 1_000_000 if metrics.get("marketCapitalization") else None,
             "pe_ratio": metrics.get("peBasicExclExtraTTM"),
             "dividend_yield": metrics.get("dividendYieldIndicatedAnnual"),
             "eps": metrics.get("epsTTM"),
@@ -322,7 +323,7 @@ async def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Finnhub fundamental error for {symbol}: {e}")
-        return _fundamental_fallback(symbol)
+        return _fundamental_fallback(symbol, current_price)
 
 
 async def fetch_institutional_ownership(symbol: str) -> Dict[str, Any]:
@@ -368,18 +369,21 @@ async def get_batch_fundamentals(symbols: List[str]) -> List[Dict[str, Any]]:
     return list(await asyncio.gather(*tasks))
 
 
-def _fundamental_fallback(symbol: str) -> Dict[str, Any]:
-    """Seeded fallback for fundamental data."""
+def _fundamental_fallback(symbol: str, current_price: Optional[float] = None) -> Dict[str, Any]:
+    """Seeded fallback for fundamental data. Scales ranges based on current_price if provided."""
     symbol = symbol.upper()
     rng = random.Random(symbol + "_fundamentals")
     
+    # Use current price as anchor, or a default seed
+    base = current_price if current_price and current_price > 0 else rng.uniform(50, 500)
+    
     return {
-        "market_cap": rng.uniform(50000, 3000000), # Millions
+        "market_cap": rng.uniform(10_000_000, 500_000_000_000), # Absolute
         "pe_ratio": rng.uniform(10, 50),
         "dividend_yield": rng.uniform(0, 5),
         "eps": rng.uniform(1, 15),
-        "high_52week": rng.uniform(150, 250),
-        "low_52week": rng.uniform(80, 150),
+        "high_52week": base * rng.uniform(1.1, 1.8),
+        "low_52week": base * rng.uniform(0.4, 0.9),
         "beta": rng.uniform(0.5, 1.8),
         "short_interest": rng.uniform(1, 15), # Percent
         "short_ratio": rng.uniform(1, 10),
