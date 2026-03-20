@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { ArrowUpRight, ArrowDownRight, Clock, RefreshCw, X, Trash2, Settings2, Search, ChevronDown, Plus } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, RefreshCw, X, Trash2, Settings2, Search, ChevronDown, Plus } from "lucide-react";
 import { ChartWidget } from "@/components/features/ChartWidget";
 import { useDashboardPulse, MarketQuote } from "@/hooks/useDashboardPulse";
 import { useAuth } from "@/contexts/AuthContext";
@@ -125,8 +125,7 @@ export default function Home() {
         <div className="flex flex-col gap-2 relative">
           <h1 className="text-3xl font-bold tracking-tight text-marble">Market Overview</h1>
           <p className="text-steel flex items-center gap-2 text-sm">
-            <Clock className="w-4 h-4" /> Market Open • 
-            <span className="flex items-center gap-1.5 ml-1">
+            <span className="flex items-center gap-1.5">
               <span className="relative flex h-2 w-2">
                 <span className={`absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 ${refreshing ? 'animate-ping' : ''}`}></span>
                 <span className={`relative inline-flex rounded-full h-2 w-2 ${refreshing ? 'bg-blue-500' : 'bg-blue-500/50'}`}></span>

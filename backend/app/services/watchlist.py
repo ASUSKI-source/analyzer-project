@@ -55,11 +55,12 @@ async def create_watchlist(db: AsyncSession, user: User, name: str) -> Dict[str,
     return {"id": str(new_list.id), "name": new_list.name}
 
 
-async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str, user: User) -> List[Dict[str, Any]] | None:
-    """Fetch all assets on a specific watchlist."""
+async def get_watchlist_content(db: AsyncSession, watchlist_id: str, user: User) -> Dict[str, Any] | None:
+    """Fetch the watchlist name and all its assets."""
     watchlist = await _get_user_watchlist(db, watchlist_id, user.id)
     if not watchlist:
         return None
+        
     result = await db.execute(
         select(Asset)
         .join(watchlist_asset_association, Asset.id == watchlist_asset_association.c.asset_id)
@@ -67,7 +68,13 @@ async def get_watchlist_symbols(db: AsyncSession, watchlist_id: str, user: User)
         .order_by(watchlist_asset_association.c.added_at.desc())
     )
     assets = result.scalars().all()
-    return [{"symbol": a.symbol, "name": a.name, "asset_type": a.asset_type} for a in assets]
+    symbols = [{"symbol": a.symbol, "name": a.name, "asset_type": a.asset_type} for a in assets]
+    
+    return {
+        "id": str(watchlist.id),
+        "name": watchlist.name,
+        "symbols": symbols
+    }
 
 
 async def add_to_watchlist(db: AsyncSession, watchlist_id: str, symbol: str, user: User) -> Dict[str, Any]:

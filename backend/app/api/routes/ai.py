@@ -17,7 +17,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.services.ai_analyzer import generate_watchlist_report, get_last_good_report
 from app.services.ai_jobs import enqueue_analysis_job, get_analysis_job, maybe_enqueue_login_prewarm
-from app.services.watchlist import get_watchlist_symbols
+from app.services.watchlist import get_watchlist_content
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,8 @@ async def _resolve_symbols(
         from app.services.watchlist import get_watchlist_headers
         headers = await get_watchlist_headers(db, current_user)
         if headers:
-            symbol_data = await get_watchlist_symbols(db, headers[0]["id"], current_user)
-            resolved = [item["symbol"] for item in (symbol_data or []) if isinstance(item, dict) and item.get("symbol")]
+            watchlist_data = await get_watchlist_content(db, headers[0]["id"], current_user)
+            resolved = [item["symbol"] for item in (watchlist_data["symbols"] if watchlist_data else []) if isinstance(item, dict) and item.get("symbol")]
         else:
             resolved = []
     return resolved[:20]

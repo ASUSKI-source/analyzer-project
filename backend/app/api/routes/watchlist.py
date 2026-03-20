@@ -91,21 +91,22 @@ async def add_symbol_to_list(
 
 
 @router.get("/{watchlist_id}", response_model=WatchlistSymbolsResponse)
-async def get_watchlist_content(
+async def get_watchlist_content_route(
     watchlist_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all symbols for a specific watchlist."""
-    symbols = await get_watchlist_symbols(db, watchlist_id, current_user)
-    if symbols is None:
+    """Get all symbols and the name for a specific watchlist."""
+    from app.services.watchlist import get_watchlist_content
+    data = await get_watchlist_content(db, watchlist_id, current_user)
+    if data is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
     return {
-        "id": watchlist_id,
-        "name": "Watchlist",
-        "symbols": symbols,
-        "count": len(symbols)
+        "id": data["id"],
+        "name": data["name"],
+        "symbols": data["symbols"],
+        "count": len(data["symbols"])
     }
 
 
