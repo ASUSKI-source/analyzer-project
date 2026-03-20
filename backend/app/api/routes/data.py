@@ -77,7 +77,7 @@ async def get_asset_analysis(
     sentiment_task = fetch_news_sentiment(symbol)
     inst_task = fetch_institutional_ownership(symbol)
     onchain_task = get_crypto_onchain_context(symbol)
-    indicators_task = get_cached_indicators(db, symbol, "1d")
+    indicators_task = get_cached_indicators(symbol, "1d", db)
 
     fundamentals, sentiment, inst_data, onchain_data, ind_payload = await asyncio.gather(
         fundamentals_task, sentiment_task, inst_task, onchain_task, indicators_task

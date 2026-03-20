@@ -187,7 +187,7 @@ export default function Home() {
                   />
                   {selectedAsset === 'BTC' && data?.sentiment && (
                     <span className={`whitespace-nowrap flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-bold ${data.sentiment.sentiment_score >= 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
-                       AI: {data.sentiment.sentiment_score > 0 ? 'BULLISH' : 'BEARISH'}
+                       News: {data.sentiment.sentiment_score > 0 ? 'BULLISH' : 'BEARISH'}
                     </span>
                   )}
                   {/* Small Refresh Button for Chart */}
@@ -518,9 +518,9 @@ function WatchlistItem({ symbol, name, price, change, isPositive, rawPrice, onCl
           <span className="font-bold text-marble group-hover:text-blue-400 transition-colors font-mono tracking-tight">{symbol}</span>
           {sentiment && (
             <span className={`whitespace-nowrap flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border font-semibold ${sentiment.score >= 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}
-              title={`AI Sentiment: ${sentiment.score > 0 ? '+' : ''}${sentiment.score.toFixed(2)} | Topics: ${sentiment.topics.join(', ')}`}
+              title={`News Sentiment: ${sentiment.score > 0 ? '+' : ''}${sentiment.score.toFixed(2)} | Topics: ${sentiment.topics.join(', ')}`}
             >
-              {sentiment.score >= 0 ? '↑' : '↓'} {sentiment.score >= 0 ? 'Bullish' : 'Bearish'}
+              {sentiment.score >= 0 ? '↑' : '↓'} News: {sentiment.score >= 0 ? 'Bullish' : 'Bearish'}
             </span>
           )}
         </div>
