@@ -270,8 +270,8 @@ async def fetch_fundamentals(symbol: str, current_price: Optional[float] = None)
     """
     symbol = symbol.upper()
     
-    # 1. Try Cache First
-    cache_key = f"fundamentals_cache:{symbol}"
+    # 1. Try Cache First (v2 for range fix)
+    cache_key = f"fundamentals_cache_v2:{symbol}"
     cached = await cache_client.get(cache_key)
     if cached:
         return cached
@@ -297,9 +297,14 @@ async def fetch_fundamentals(symbol: str, current_price: Optional[float] = None)
             await cache_client.set("circuit_breaker:finnhub", "tripped", expire_seconds=300)
             return _fundamental_fallback(symbol)
             
+        from app.services.coingecko import is_crypto
         response.raise_for_status()
         data = response.json()
         metrics = data.get("metric", {})
+
+        # If it's a known crypto and Finnhub returned nothing, trigger better fallback
+        if not metrics and is_crypto(symbol):
+            return _fundamental_fallback(symbol, current_price)
 
         result = {
             "market_cap": (metrics.get("marketCapitalization") or 0) * 1_000_000 if metrics.get("marketCapitalization") else None,

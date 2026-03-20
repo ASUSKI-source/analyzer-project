@@ -529,7 +529,7 @@ async def _assemble_data_context(
 
 async def _get_cached_fundamentals(symbol: str) -> Dict[str, Any]:
     """Fetch fundamentals with a 12-hour cache."""
-    cache_key = f"fundamentals_cache:{symbol}"
+    cache_key = f"fundamentals_cache_v2:{symbol}"
     cached = await cache_client.get(cache_key)
     if cached:
         return cached
@@ -563,6 +563,7 @@ Ground every claim in the provided data. Be direct; no hype or filler.
 - **Fundamentals**: Use P/E, EPS, beta. For crypto, prioritize on-chain and derivative metrics.
 - **Conflicts**: Flag if volume (OBV) diverges from price or if 1h is overextended.
 - **Missing data**: State it plainly and weight available signals accordingly.
+- **Definitions**: 'rsi_daily' should use the 1d RSI (often listed as rsi_14). 'eps' is Earnings Per Share.
 
 ## Output — return ONLY this JSON, no markdown, no preamble:
 {
@@ -1282,9 +1283,9 @@ def _normalize_asset(asset: Dict[str, Any]) -> Dict[str, Any]:
         },
         "is_crypto": bool(asset.get("is_crypto", False)),
         "key_metrics": {
-            "rsi_daily": key_metrics.get("rsi_daily"),
-            "pe_ratio": key_metrics.get("pe_ratio"),
-            "eps": key_metrics.get("eps"),
+            "rsi_daily": key_metrics.get("rsi_daily") or key_metrics.get("rsi") or key_metrics.get("rsi_14"),
+            "pe_ratio": key_metrics.get("pe_ratio") or key_metrics.get("pe"),
+            "eps": key_metrics.get("eps") or key_metrics.get("eps_ttm"),
             "long_short_ratio": key_metrics.get("long_short_ratio"),
             "macd_signal": _safe_text(key_metrics.get("macd_signal"), "Neutral"),
         },
