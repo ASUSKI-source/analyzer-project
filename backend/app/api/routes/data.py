@@ -114,8 +114,8 @@ async def get_asset_analysis(
         technicals=technicals,
         fundamentals=FundamentalData(**fundamentals),
         sentiment=sentiment,
-        institutional=inst_data if isinstance(inst_data, dict) and inst_data.get("shares_held") else None,
-        on_chain=onchain_data if isinstance(onchain_data, dict) and onchain_data.get("fear_and_greed") else None,
+        institutional=inst_data if isinstance(inst_data, dict) and (inst_data.get("shares_held") or inst_data.get("institution_count")) else None,
+        on_chain=onchain_data if isinstance(onchain_data, dict) and onchain_data else None,
         last_updated=datetime.utcnow().isoformat()
     )
 

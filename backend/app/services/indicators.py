@@ -120,7 +120,7 @@ async def get_cached_indicators(
     if not candles:
         try:
             from app.services.market_data import get_live_intraday_history
-            res = await get_live_intraday_history(symbol, days=days)
+            res = await get_live_intraday_history(db, symbol, days=days)
             if isinstance(res, tuple) and len(res) == 2:
                 candles, _ = res
             else:

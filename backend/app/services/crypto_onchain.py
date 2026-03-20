@@ -40,10 +40,9 @@ async def fetch_binance_futures_data(symbol: str) -> Dict[str, Any]:
     Fetches Long/Short ratio and Open Interest from Binance Futures (USDT-M).
     Returns metrics helpful for assessing "Short Squeeze" potential in crypto.
     """
-    # Normalize BTC-USD to BTCUSDT for Binance
-    binance_sym = symbol.upper().replace("-", "").replace("/", "")
-    if not binance_sym.endswith("USDT"):
-        binance_sym += "USDT"
+    # Normalize symbols: BTC-USD, BTC/USD, BTC -> BTCUSDT
+    clean_sym = symbol.upper().replace("-", "").replace("/", "").replace("USD", "")
+    binance_sym = f"{clean_sym}USDT"
 
     cache_key = f"crypto_futures_data:{binance_sym}"
     cached = await cache_client.get(cache_key)
@@ -52,6 +51,15 @@ async def fetch_binance_futures_data(symbol: str) -> Dict[str, Any]:
     base_url = "https://fapi.binance.com/futures/data"
     client = get_http_client()
     
+    # Defaults
+    result = {
+        "long_short_ratio": None,
+        "long_account": None,
+        "short_account": None,
+        "open_interest": None,
+        "open_interest_value": None
+    }
+
     try:
         # 1. Long/Short Ratio (Top Traders)
         ls_res = await client.get(
@@ -66,21 +74,22 @@ async def fetch_binance_futures_data(symbol: str) -> Dict[str, Any]:
             timeout=5.0
         )
         
-        ls_data = ls_res.json()[0] if ls_res.status_code == 200 and ls_res.json() else {}
-        oi_data = oi_res.json()[0] if oi_res.status_code == 200 and oi_res.json() else {}
+        if ls_res.status_code == 200 and ls_res.json():
+            ls_data = ls_res.json()[0]
+            result["long_short_ratio"] = float(ls_data.get("longShortRatio", 0))
+            result["long_account"] = float(ls_data.get("longAccount", 0))
+            result["short_account"] = float(ls_data.get("shortAccount", 0))
+            
+        if oi_res.status_code == 200 and oi_res.json():
+            oi_data = oi_res.json()[0]
+            result["open_interest"] = float(oi_data.get("sumOpenInterest", 0))
+            result["open_interest_value"] = float(oi_data.get("sumOpenInterestValue", 0))
         
-        result = {
-            "long_short_ratio": ls_data.get("longShortRatio"),
-            "long_account": ls_data.get("longAccount"),
-            "short_account": ls_data.get("shortAccount"),
-            "open_interest": oi_data.get("sumOpenInterest"),
-            "open_interest_value": oi_data.get("sumOpenInterestValue")
-        }
         await cache_client.set(cache_key, result, expire_seconds=300) # 5 min
         return result
     except Exception as e:
         logger.debug(f"Binance futures data fetch failed for {binance_sym}: {e}")
-        return {}
+        return result
 
 async def get_crypto_onchain_context(symbol: str) -> Dict[str, Any]:
     """

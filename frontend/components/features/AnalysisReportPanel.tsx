@@ -33,6 +33,7 @@ interface AssetAnalysis {
   key_metrics: {
     rsi_daily?: number;
     pe_ratio?: number;
+    eps?: number;
     macd_signal?: string;
     ema_signal?: string;
   };
@@ -676,6 +677,22 @@ export function AnalysisReportPanel({ symbols, selectedSymbol: externalSymbol, o
                       {fmt(asset.key_metrics?.rsi_daily, 0)}
                     </span>
                   </div>
+
+                  <div className="flex gap-4">
+                    <div className="flex flex-col items-center">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">P/E</span>
+                      <span className="text-[11px] font-bold text-slate-300">
+                        {fmt(asset.key_metrics?.pe_ratio, 1)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">EPS</span>
+                      <span className="text-[11px] font-bold text-slate-300">
+                        {fmt(asset.key_metrics?.eps, 2)}
+                      </span>
+                    </div>
+                  </div>
+
                   <ArrowRight className={`w-3.5 h-3.5 text-slate-600 transition-transform group-hover:translate-x-0.5 ${isSelected ? "text-blue-400" : ""}`} />
                 </div>
 

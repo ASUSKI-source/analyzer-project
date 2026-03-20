@@ -574,7 +574,7 @@ Ground every claim in the provided data. Be direct; no hype or filler.
       "symbol": "TICKER",
       "verdict": "BULLISH|BEARISH|NEUTRAL|CAUTION",
       "timeframe_signals": {"tactical_1h": "Bullish|Bearish|Neutral", "trend_1d": "Bullish|Bearish|Neutral", "strategic_1w": "Bullish|Bearish|Neutral"},
-      "key_metrics": {"rsi_daily": 0.0, "pe_ratio": 0.0, "macd_signal": "Bullish|Bearish|Neutral"},
+      "key_metrics": {"rsi_daily": 0.0, "pe_ratio": 0.0, "eps": 0.0, "macd_signal": "Bullish|Bearish|Neutral"},
       "analysis_bullets": ["Max 3 concise, data-backed bullet points"],
       "catalyst": "Concise key level or event",
       "action_note": "Terse, 1-sentence observation"
