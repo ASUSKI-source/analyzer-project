@@ -44,10 +44,16 @@ export function ChartWidget({
         lastTime = lastBar.time;
       } else {
         // Handle ISO string or YYYY-MM-DD
-        const date = new Date(lastBar.time);
+        const date = new Date(lastBar.time as string);
         lastTime = Math.floor(date.getTime() / 1000);
       }
       
+      // STRICT GUARD: Never update if tick is older than our last known bar
+      if (tickTime < lastTime) {
+        console.warn(`[Chart] Ignoring stale tick for ${symbol}: tick=${tickTime} < last=${lastTime}`);
+        return;
+      }
+
       const isNewBar = tickTime >= lastTime + interval;
 
       if (isNewBar) {
@@ -64,15 +70,19 @@ export function ChartWidget({
           low: liveTick.p,
           close: liveTick.p,
         };
-        seriesRef.current.update(newBar);
-        lastBarRef.current = newBar;
+        try {
+          seriesRef.current.update(newBar);
+          lastBarRef.current = newBar;
 
-        if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.update({
-            time: newTime as Time,
-            value: liveTick.s,
-            color: "rgba(16, 185, 129, 0.2)"
-          });
+          if (volumeSeriesRef.current) {
+            volumeSeriesRef.current.update({
+              time: newTime as Time,
+              value: liveTick.s,
+              color: "rgba(16, 185, 129, 0.2)"
+            });
+          }
+        } catch (e) {
+          console.error("[Chart] New bar update failed:", e);
         }
       } else {
         // Update existing bar
@@ -82,15 +92,19 @@ export function ChartWidget({
           high: Math.max(lastBar.high, liveTick.p),
           low: Math.min(lastBar.low, liveTick.p),
         };
-        seriesRef.current.update(updatedBar);
-        lastBarRef.current = updatedBar;
+        try {
+          seriesRef.current.update(updatedBar);
+          lastBarRef.current = updatedBar;
 
-        if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.update({
-            time: lastBar.time as Time,
-            value: (lastBar.value || 0) + liveTick.s,
-            color: updatedBar.close >= updatedBar.open ? "rgba(16, 185, 129, 0.2)" : "rgba(244, 63, 94, 0.2)"
-          });
+          if (volumeSeriesRef.current) {
+            volumeSeriesRef.current.update({
+              time: lastBar.time as Time,
+              value: (lastBar.value || 0) + liveTick.s,
+              color: updatedBar.close >= updatedBar.open ? "rgba(16, 185, 129, 0.2)" : "rgba(244, 63, 94, 0.2)"
+            });
+          }
+        } catch (e) {
+          console.error("[Chart] Bar update failed:", e);
         }
       }
     }
@@ -218,19 +232,34 @@ export function ChartWidget({
           chartRef.current?.timeScale().fitContent();
 
           // Force immediate sync with live tick if available (Prevents stale history vs StatCard mismatch)
-          if (liveTick && seriesRef.current && lastBarRef.current) {
-            const isDaily = intervalSecondsRef.current >= 86400;
-            const normalizedTickTime = Math.floor(Math.floor(liveTick.t / 1000) / intervalSecondsRef.current) * intervalSecondsRef.current;
-            const tickDate = isDaily ? new Date(normalizedTickTime * 1000).toISOString().split('T')[0] : (normalizedTickTime as UTCTimestamp);
-            
-            seriesRef.current.update({
-              time: tickDate as Time,
-              open: lastBarRef.current.open,
-              high: Math.max(lastBarRef.current.high, liveTick.p),
-              low: Math.min(lastBarRef.current.low, liveTick.p),
-              close: liveTick.p
-            });
-          }
+            if (liveTick && seriesRef.current && lastBarRef.current) {
+              const isDaily = intervalSecondsRef.current >= 86400;
+              const normalizedTickTime = Math.floor(Math.floor(liveTick.t / 1000) / intervalSecondsRef.current) * intervalSecondsRef.current;
+              
+              // Only apply live tick sync if it's NOT older than the latest historical data
+              let lastHistTime: number;
+              if (typeof lastBarRef.current.time === 'number') {
+                lastHistTime = lastBarRef.current.time;
+              } else {
+                lastHistTime = Math.floor(new Date(lastBarRef.current.time as string).getTime() / 1000);
+              }
+
+              if (normalizedTickTime >= lastHistTime) {
+                const tickDate = isDaily ? new Date(normalizedTickTime * 1000).toISOString().split('T')[0] : (normalizedTickTime as UTCTimestamp);
+                
+                try {
+                  seriesRef.current.update({
+                    time: tickDate as Time,
+                    open: lastBarRef.current.open,
+                    high: Math.max(lastBarRef.current.high, liveTick.p),
+                    low: Math.min(lastBarRef.current.low, liveTick.p),
+                    close: liveTick.p
+                  });
+                } catch (e) {
+                  console.warn("[Chart] Sync tick failed:", e);
+                }
+              }
+            }
         } else {
           setError(`No history for ${symbol}`);
         }
