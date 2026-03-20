@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 from app.services.watchlist import (
     get_watchlist_headers,
     create_watchlist,
-    get_watchlist_symbols,
+    get_watchlist_content,
     add_to_watchlist,
     remove_from_watchlist,
     delete_watchlist,

@@ -103,46 +103,62 @@ export function ChartWidget({
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "rgba(255, 255, 255, 0.6)",
+        textColor: "rgba(255, 255, 255, 0.5)",
         attributionLogo: false,
+        fontSize: 11,
+        fontFamily: "Inter, system-ui, sans-serif",
       },
       grid: {
-        vertLines: { color: "rgba(255, 255, 255, 0.05)" },
-        horzLines: { color: "rgba(255, 255, 255, 0.05)" },
+        vertLines: { visible: false },
+        horzLines: { color: "rgba(255, 255, 255, 0.03)" },
       },
       timeScale: {
-        borderColor: "rgba(255, 255, 255, 0.1)",
+        borderColor: "rgba(255, 255, 255, 0.05)",
         timeVisible: true,
         secondsVisible: false,
+        barSpacing: 10,
       },
       rightPriceScale: {
-        borderColor: "rgba(255, 255, 255, 0.1)",
+        borderColor: "rgba(255, 255, 255, 0.05)",
+        scaleMargins: { top: 0.1, bottom: 0.2 },
       },
       crosshair: {
-        mode: 0,
-        vertLine: { color: 'rgba(56, 189, 248, 0.5)', width: 1, style: 3 },
-        horzLine: { color: 'rgba(56, 189, 248, 0.5)', width: 1, style: 3 },
+        mode: 1, // Magnet Mode
+        vertLine: { 
+          color: 'rgba(56, 189, 248, 0.4)', 
+          width: 1, 
+          style: 2, // Dashed
+          labelBackgroundColor: '#0f172a'
+        },
+        horzLine: { 
+          color: 'rgba(56, 189, 248, 0.4)', 
+          width: 1, 
+          style: 2, // Dashed
+          labelBackgroundColor: '#0f172a'
+        },
       },
+      handleScroll: true,
+      handleScale: true,
       autoSize: true,
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "rgba(16, 185, 129, 0.8)",
-      downColor: "rgba(244, 63, 94, 0.8)",
+      upColor: "#10b981", // Emerald
+      downColor: "#f43f5e", // Rose
       borderVisible: false,
-      wickUpColor: "rgba(16, 185, 129, 1)",
-      wickDownColor: "rgba(244, 63, 94, 1)",
+      wickUpColor: "#10b981", 
+      wickDownColor: "#f43f5e",
     });
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: "rgba(56, 189, 248, 0.2)",
+      color: "rgba(56, 189, 248, 0.15)",
       priceFormat: { type: "volume" },
       priceScaleId: "",
     });
     
     volumeSeries.priceScale().applyOptions({
       visible: false,
-      scaleMargins: { top: 0.8, bottom: 0 },
+      scaleMargins: { top: 0.85, bottom: 0 },
     });
 
     chartRef.current = chart;
@@ -177,6 +193,18 @@ export function ChartWidget({
 
           const getTs = (t: string | number) => typeof t === 'number' ? t : Math.floor(new Date(t).getTime() / 1000);
           const sorted = [...data].sort((a, b) => getTs(a.time) - getTs(b.time));
+
+          // Calculate precision based on price magnitude
+          const avgPrice = sorted.reduce((acc, bar) => acc + bar.close, 0) / sorted.length;
+          const precision = avgPrice < 0.01 ? 8 : avgPrice < 1 ? 6 : avgPrice < 5 ? 4 : 2;
+          
+          seriesRef.current?.applyOptions({
+            priceFormat: {
+              type: 'price',
+              precision: precision,
+              minMove: 1 / Math.pow(10, precision),
+            },
+          });
           
           seriesRef.current?.setData(sorted as any);
           lastBarRef.current = sorted[sorted.length - 1];
