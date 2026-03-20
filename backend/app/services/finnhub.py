@@ -270,8 +270,8 @@ async def fetch_fundamentals(symbol: str, current_price: Optional[float] = None)
     """
     symbol = symbol.upper()
     
-    # 1. Try Cache First (v2 for range fix)
-    cache_key = f"fundamentals_cache_v2:{symbol}"
+    # 1. Try Cache First (v3 for real Polygon range)
+    cache_key = f"fundamentals_cache_v3:{symbol}"
     cached = await cache_client.get(cache_key)
     if cached:
         return cached
@@ -368,30 +368,44 @@ async def fetch_institutional_ownership(symbol: str) -> Dict[str, Any]:
 async def get_batch_fundamentals(symbols: List[str]) -> List[Dict[str, Any]]:
     """Parallel fetch of fundamentals for multiple symbols."""
     if await cache_client.get("circuit_breaker:finnhub"):
-        return [_fundamental_fallback(s) for s in symbols]
+        tasks = [_fundamental_fallback(s) for s in symbols]
+        return list(await asyncio.gather(*tasks))
         
     tasks = [fetch_fundamentals(s) for s in symbols]
     return list(await asyncio.gather(*tasks))
 
 
-def _fundamental_fallback(symbol: str, current_price: Optional[float] = None) -> Dict[str, Any]:
-    """Seeded fallback for fundamental data. Scales ranges based on current_price if provided."""
-    symbol = symbol.upper()
-    rng = random.Random(symbol + "_fundamentals")
-    
-    # Use current price as anchor, or a default seed
-    base = current_price if current_price and current_price > 0 else rng.uniform(50, 500)
-    
+async def _fundamental_fallback(symbol: str, current_price: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Returns realistic fallback data if Finnhub fails, using Polygon for 52W ranges if crypto.
+    """
+    from app.services.coingecko import is_crypto
+    from app.services.polygon import fetch_polygon_52w_high_low
+
+    # Try to get real 52-week range from Polygon (especially for crypto)
+    poly_range = await fetch_polygon_52w_high_low(symbol)
+    h_52 = poly_range.get("high")
+    l_52 = poly_range.get("low")
+
+    # If Polygon fails, use smart mock fallback
+    if h_52 is None or l_52 is None:
+        if current_price:
+            h_52 = current_price * 1.15
+            l_52 = current_price * 0.85
+        else:
+            h_52 = 0.0
+            l_52 = 0.0
+
     return {
-        "market_cap": rng.uniform(10_000_000, 500_000_000_000), # Absolute
-        "pe_ratio": rng.uniform(10, 50),
-        "dividend_yield": rng.uniform(0, 5),
-        "eps": rng.uniform(1, 15),
-        "high_52week": base * rng.uniform(1.1, 1.8),
-        "low_52week": base * rng.uniform(0.4, 0.9),
-        "beta": rng.uniform(0.5, 1.8),
-        "short_interest": rng.uniform(1, 15), # Percent
-        "short_ratio": rng.uniform(1, 10),
-        "description": f"Simulated fundamental profile for {symbol}"
+        "market_cap": 0,
+        "pe_ratio": None,
+        "dividend_yield": None,
+        "eps": None,
+        "high_52week": h_52,
+        "low_52week": l_52,
+        "beta": 1.0,
+        "short_interest": 0,
+        "short_ratio": 0,
+        "description": f"Fallback data for {symbol} (Real Polygon 52W applied)" if poly_range.get("high") else f"Fallback data for {symbol} (Mocked)"
     }
 

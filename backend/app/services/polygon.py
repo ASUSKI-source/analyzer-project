@@ -109,3 +109,37 @@ async def search_polygon_tickers(query: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Polygon ticker search failed: {e}")
         return []
+async def fetch_polygon_52w_high_low(symbol: str) -> Dict[str, Optional[float]]:
+    """
+    Fetches real historical 52-week high/low for stocks and crypto using Polygon Aggregates.
+    """
+    if not _has_valid_key():
+        return {"high": None, "low": None}
+
+    symbol = symbol.upper()
+    # Normalize for Polygon Crypto if it's a known coin (simple check)
+    from app.services.coingecko import is_crypto
+    poly_sym = f"X:{symbol}USD" if is_crypto(symbol) else symbol
+    
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = end_date.strftime("%Y-%m-%d")
+    
+    url = f"https://api.polygon.io/v2/aggs/ticker/{poly_sym}/range/1/day/{start_str}/{end_str}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(url, params={"apiKey": settings.POLYGON_API_KEY, "adjusted": "true"})
+            if res.status_code == 429: return {"high": None, "low": None}
+            res.raise_for_status()
+            data = res.json()
+            results = data.get("results", [])
+            if results:
+                highs = [float(r["h"]) for r in results]
+                lows = [float(r["l"]) for r in results]
+                return {"high": max(highs), "low": min(lows)}
+    except Exception as e:
+        logger.warning(f"Polygon 52W fetch failed for {symbol}: {e}")
+
+    return {"high": None, "low": None}
